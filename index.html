@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALM Optimizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root{--bg:#0a0e14;--bg2:#0d1117;--card:#161b22;--border:#21262d;--text:#e6edf3;--muted:#8b949e;--blue:#58a6ff;--green:#3fb950;--orange:#d29922;--red:#f85149;--purple:#a371f7;--cyan:#79c0ff}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+        .container{max-width:1600px;margin:0 auto;padding:1.5rem}
+        header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;padding-bottom:1rem;border-bottom:1px solid var(--border)}
+        .logo{display:flex;align-items:center;gap:1rem}
+        .logo-icon{width:44px;height:44px;background:linear-gradient(135deg,var(--blue),var(--purple));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;font-weight:700}
+        .logo h1{font-size:1.3rem}
+        .status{display:flex;align-items:center;gap:.5rem;padding:.5rem 1rem;background:var(--card);border:1px solid var(--border);border-radius:20px;font-size:.85rem}
+        .dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+        .dot.running{background:var(--orange);animation:pulse 1.5s infinite}
+        @keyframes pulse{50%{opacity:.5;transform:scale(1.2)}}
+        .grid{display:grid;grid-template-columns:1fr 400px;gap:1.5rem}
+        @media(max-width:1100px){.grid{grid-template-columns:1fr}}
+        .card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+        .card-head{padding:1rem;border-bottom:1px solid var(--border);background:rgba(255,255,255,.02);display:flex;justify-content:space-between;align-items:center}
+        .card-head span{font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+        .card-body{padding:1.25rem}
+        .tabs{display:flex;gap:.25rem;padding:.25rem;background:var(--bg2);border-radius:8px;margin-bottom:1.25rem}
+        .tab{flex:1;padding:.6rem;background:0;border:0;border-radius:6px;color:var(--muted);font-size:.8rem;cursor:pointer}
+        .tab:hover{color:var(--text)}
+        .tab.active{background:var(--card);color:var(--text)}
+        .tab-content{display:none}
+        .tab-content.active{display:block}
+        .section{margin-bottom:1.5rem}
+        .section-title{font-size:.7rem;font-weight:600;text-transform:uppercase;color:var(--blue);margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem}
+        .section-title::before{content:'';width:3px;height:12px;background:linear-gradient(var(--blue),var(--purple));border-radius:2px}
+        .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem}
+        .form-group{display:flex;flex-direction:column;gap:.25rem}
+        .form-group label{font-size:.7rem;color:var(--muted)}
+        .form-group input,.form-group select{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:.5rem .75rem;color:var(--text);font-family:monospace;font-size:.8rem}
+        .form-group input:focus,.form-group select:focus{outline:0;border-color:var(--blue)}
+        .form-group input[type=checkbox]{width:16px;height:16px}
+        .checkbox-group{flex-direction:row;align-items:center;gap:.5rem}
+        .btn{padding:.6rem 1.2rem;border:0;border-radius:8px;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s}
+        .btn-primary{background:linear-gradient(135deg,var(--blue),var(--purple));color:#fff}
+        .btn-primary:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(88,166,255,.3)}
+        .btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}
+        .btn-secondary{background:var(--bg2);border:1px solid var(--border);color:var(--text)}
+        .btn-danger{background:rgba(248,81,73,.1);border:1px solid var(--red);color:var(--red)}
+        .mode-toggle{display:flex;gap:.5rem;margin-bottom:1rem}
+        .mode-btn{flex:1;padding:.75rem;background:var(--bg2);border:2px solid var(--border);border-radius:10px;color:var(--muted);font-size:.8rem;font-weight:600;cursor:pointer;text-align:center}
+        .mode-btn:hover{border-color:var(--muted);color:var(--text)}
+        .mode-btn.active{border-color:var(--blue);background:rgba(88,166,255,.1);color:var(--blue)}
+        .mode-btn .icon{font-size:1.1rem;margin-bottom:.2rem}
+        .opt-method{display:flex;gap:.4rem}
+        .method-btn{flex:1;padding:.5rem;background:var(--bg2);border:2px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;text-align:center;font-size:.7rem}
+        .method-btn:hover{border-color:var(--muted);color:var(--text)}
+        .method-btn.active{border-color:var(--blue);background:rgba(88,166,255,.1);color:var(--blue)}
+        .method-btn .name{font-weight:600}
+        .console{background:var(--bg);border:1px solid var(--border);border-radius:10px;font-family:monospace;font-size:.7rem;height:180px;overflow-y:auto;padding:.75rem}
+        .console-line{padding:.2rem 0;border-bottom:1px solid rgba(255,255,255,.03)}
+        .console-line.info{color:var(--blue)}
+        .console-line.success{color:var(--green)}
+        .console-line.warning{color:var(--orange)}
+        .console-line.error{color:var(--red)}
+        .chart-box{height:320px;background:var(--bg2);border-radius:10px;padding:1rem;margin-bottom:1rem}
+        .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem}
+        .stat{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:.6rem;text-align:center}
+        .stat-val{font-size:1.1rem;font-weight:700;font-family:monospace}
+        .stat-val.pos{color:var(--green)}
+        .stat-val.neg{color:var(--red)}
+        .stat-val.neu{color:var(--blue)}
+        .files{display:flex;flex-direction:column;gap:.4rem;max-height:200px;overflow-y:auto}
+        .file{display:flex;align-items:center;justify-content:space-between;padding:.6rem .8rem;background:var(--bg2);border:1px solid var(--border);border-radius:8px}
+        .file-info{display:flex;align-items:center;gap:.6rem}
+        .file-icon{width:28px;height:28px;background:rgba(88,166,255,.1);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--blue);font-size:.8rem}
+        .file-name{font-size:.75rem;font-weight:500}
+        .file-meta{font-size:.65rem;color:var(--muted)}
+        .file-dl{padding:.3rem .6rem;background:0;border:1px solid var(--border);border-radius:5px;color:var(--muted);font-size:.65rem;cursor:pointer}
+        .file-dl:hover{border-color:var(--blue);color:var(--text)}
+        .upload{border:2px dashed var(--border);border-radius:10px;padding:1.2rem;text-align:center;cursor:pointer}
+        .upload:hover{border-color:var(--blue);background:rgba(88,166,255,.03)}
+        .upload .icon{font-size:1.5rem;opacity:.5;margin-bottom:.3rem}
+        .upload p{color:var(--muted);font-size:.75rem}
+        .progress{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;margin-top:.75rem}
+        .progress-bar{height:100%;background:linear-gradient(90deg,var(--blue),var(--purple));animation:prog 2s infinite}
+        @keyframes prog{0%{width:0;margin-left:0}50%{width:30%;margin-left:35%}100%{width:0;margin-left:100%}}
+        .scroll{max-height:calc(100vh - 180px);overflow-y:auto}
+        .sidebar{display:flex;flex-direction:column;gap:1.25rem}
+        .actions{display:flex;gap:.5rem;margin-top:.75rem}
+        .actions .btn{flex:1}
+        .empty{padding:1.5rem;text-align:center;color:var(--muted)}
+        .empty .icon{font-size:1.5rem;opacity:.3;margin-bottom:.3rem}
+        .panel{display:none}
+        .panel.active{display:block}
+        .corr{display:grid;gap:.4rem;font-size:.65rem}
+        .corr-row{display:grid;grid-template-columns:70px repeat(6,1fr);gap:.3rem;align-items:center}
+        .corr-lbl{color:var(--muted);text-align:right;padding-right:.4rem}
+        .corr-cell{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:.35rem;text-align:center}
+        .corr-cell input{width:100%;background:0;border:0;color:var(--text);text-align:center;font-family:monospace;font-size:.65rem}
+        .corr-cell input:focus{outline:0}
+        .corr-cell.diag{background:rgba(88,166,255,.1);color:var(--blue)}
+        .corr-cell.hdr{background:0;border:0;font-weight:600}
+        .main-tabs{display:flex;gap:.5rem;margin-bottom:1.5rem}
+        .main-tab{padding:.75rem 1.5rem;background:var(--bg2);border:2px solid var(--border);border-radius:10px;color:var(--muted);font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s}
+        .main-tab:hover{border-color:var(--muted);color:var(--text)}
+        .main-tab.active{border-color:var(--purple);background:rgba(163,113,247,.1);color:var(--purple)}
+        .main-view{display:none}
+        .main-view.active{display:block}
+        .analysis-container{display:grid;grid-template-columns:1fr;gap:1.5rem}
+        .analysis-header{display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+        .analysis-select{flex:1;min-width:200px}
+        .analysis-select select{width:100%;padding:.6rem 1rem;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.85rem}
+        .year-slider{display:flex;align-items:center;gap:1rem}
+        .year-slider input[type=range]{width:150px;accent-color:var(--purple)}
+        .year-slider .year-val{font-family:monospace;font-weight:700;color:var(--purple);min-width:40px}
+        .boxplot-container{position:relative;height:400px;background:var(--bg2);border-radius:10px;padding:1rem}
+        .path-analysis{display:none}
+        .path-analysis.active{display:block}
+        .path-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
+        .path-title{font-size:1rem;font-weight:600;color:var(--cyan)}
+        .back-btn{padding:.4rem .8rem;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:.75rem;cursor:pointer}
+        .back-btn:hover{border-color:var(--blue);color:var(--text)}
+        .path-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:1rem}
+        .path-chart{background:var(--bg2);border-radius:10px;padding:1rem;cursor:pointer;transition:all .2s}
+        .path-chart:hover{border:1px solid var(--blue);transform:translateY(-2px)}
+        .path-chart-title{font-size:.75rem;font-weight:600;color:var(--muted);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.05em}
+        .path-chart-box{height:280px;position:relative}
+        .chart-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);z-index:1000;padding:2rem}
+        .chart-modal.active{display:flex;flex-direction:column}
+        .chart-modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
+        .chart-modal-title{font-size:1.2rem;font-weight:600;color:var(--text)}
+        .chart-modal-close{padding:.5rem 1rem;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9rem;cursor:pointer}
+        .chart-modal-close:hover{border-color:var(--red);color:var(--red)}
+        .chart-modal-body{flex:1;background:var(--card);border-radius:12px;padding:1.5rem;position:relative}
+        .chart-modal-canvas{width:100%;height:100%}
+        .chart-modal-legend{display:flex;gap:1.5rem;justify-content:center;margin-top:1rem;font-size:.8rem}
+        .params-box{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:1rem}
+        .params-title{font-size:.75rem;font-weight:600;color:var(--muted);margin-bottom:.75rem;text-transform:uppercase;letter-spacing:.05em}
+        .params-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.5rem}
+        .param-item{display:flex;justify-content:space-between;padding:.3rem .5rem;background:var(--bg);border-radius:4px;font-size:.7rem}
+        .param-label{color:var(--muted)}
+        .param-value{font-family:monospace;color:var(--text);font-weight:500}
+        .legend-inline{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;font-size:.65rem}
+        .legend-item{display:flex;align-items:center;gap:.3rem}
+        .legend-dot{width:10px;height:10px;border-radius:2px}
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="logo"><div class="logo-icon">Σ</div><div><h1>ALM Optimizer</h1></div></div>
+        <div class="status"><div class="dot" id="statusDot"></div><span id="statusText">Bereit</span></div>
+    </header>
+    <div class="main-tabs">
+        <button class="main-tab active" data-view="simulation">📊 Simulation & Optimierung</button>
+        <button class="main-tab" data-view="analysis">🔍 Pfadanalyse</button>
+    </div>
+    <!-- Simulation View -->
+    <div class="main-view active" id="view-simulation">
+        <div class="grid">
+            <div style="display:flex;flex-direction:column;gap:1.25rem">
+                <div class="card" id="chartCard" style="display:none">
+                    <div class="card-head"><span>Deckungsgrad-Verlauf</span><button class="btn btn-secondary" style="padding:.3rem .6rem;font-size:.7rem" id="hideChart">✕</button></div>
+                    <div class="card-body">
+                        <div class="chart-box"><canvas id="dgChart"></canvas></div>
+                        <div class="stats">
+                            <div class="stat"><div class="stat-val neu" id="statPaths">-</div><div class="stat-lbl">Pfade</div></div>
+                            <div class="stat"><div class="stat-val" id="statWDefault">-</div><div class="stat-lbl">Ø Liab. at Default</div></div>
+                            <div class="stat"><div class="stat-val" id="statUF">-</div><div class="stat-lbl">P(Unterdeckung)</div></div>
+                            <div class="stat"><div class="stat-val" id="statDefault">-</div><div class="stat-lbl">P(Default)</div></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-head"><span>Parameter</span></div>
+                    <div class="card-body scroll">
+                        <div class="tabs">
+                            <button class="tab active" data-tab="general">Allgemein</button>
+                            <button class="tab" data-tab="returns">Renditen</button>
+                            <button class="tab" data-tab="bonds">Anleihen</button>
+                            <button class="tab" data-tab="corr">Korrelationen</button>
+                        </div>
+                        <div class="tab-content active" id="tab-general">
+                            <div class="section"><div class="section-title">Simulation</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>MC-Pfade</label><input type="number" id="N_PATHS" value="500"></div>
+                                    <div class="form-group"><label>Horizont (J)</label><input type="number" id="T_HORIZON" value="40"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Finanzierung</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Reservenrate</label><input type="number" id="GENERAL_RESERVE_RATE" value="0.050" step="0.001"></div>
+                                    <div class="form-group"><label>Admin-Gebühr</label><input type="number" id="ADMIN_FEE_PER_PERSON" value="150"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Asset Allocation</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Gov Bonds</label><input type="number" id="WEIGHT_GovBonds" value="0.65" step="0.01"></div>
+                                    <div class="form-group"><label>Corp Bonds</label><input type="number" id="WEIGHT_CorpBonds" value="0.23" step="0.01"></div>
+                                    <div class="form-group"><label>Equities</label><input type="number" id="WEIGHT_Equities" value="0.05" step="0.01"></div>
+                                    <div class="form-group"><label>Real Estate</label><input type="number" id="WEIGHT_RealEstate" value="0.07" step="0.01"></div>
+                                    <div class="form-group"><label>Alternatives</label><input type="number" id="WEIGHT_Alternatives" value="0.00" step="0.01"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Zinsstruktur</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Yield Slope</label><input type="number" id="YIELD_CURVE_SLOPE" value="0.00025" step="0.0001"></div>
+                                    <div class="form-group"><label>Basis Floor</label><input type="number" id="BASIS_RATE_FLOOR" value="-0.01" step="0.001"></div>
+                                    <div class="form-group"><label>Tech Duration</label><input type="number" id="TECHNICAL_RATE_DURATION" value="12.0" step="0.5"></div>
+                                    <div class="form-group"><label>Liab Spread</label><input type="number" id="LIABILITY_DISCOUNT_SPREAD" value="0.003" step="0.001"></div>
+                                    <div class="form-group"><label>Tech Floor</label><input type="number" id="TECHNICAL_RATE_FLOOR" value="0.005" step="0.001"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-content" id="tab-returns">
+                            <div class="section"><div class="section-title">Erwartete Renditen (μ)</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Interest Rate</label><input type="number" id="MU_InterestRate" value="0.0015" step="0.0001"></div>
+                                    <div class="form-group"><label>Gov Bonds</label><input type="number" id="MU_GovBonds" value="0.000" step="0.001"></div>
+                                    <div class="form-group"><label>Corp Bonds</label><input type="number" id="MU_CorpBonds" value="0.000" step="0.001"></div>
+                                    <div class="form-group"><label>Equities</label><input type="number" id="MU_Equities" value="0.055" step="0.001"></div>
+                                    <div class="form-group"><label>Real Estate</label><input type="number" id="MU_RealEstate" value="0.025" step="0.001"></div>
+                                    <div class="form-group"><label>Alternatives</label><input type="number" id="MU_Alternatives" value="0.035" step="0.001"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Volatilitäten (σ)</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Interest Rate</label><input type="number" id="SIGMA_InterestRate" value="0.0061" step="0.0001"></div>
+                                    <div class="form-group"><label>Gov Bonds</label><input type="number" id="SIGMA_GovBonds" value="0.030" step="0.001"></div>
+                                    <div class="form-group"><label>Corp Bonds</label><input type="number" id="SIGMA_CorpBonds" value="0.040" step="0.001"></div>
+                                    <div class="form-group"><label>Equities</label><input type="number" id="SIGMA_Equities" value="0.150" step="0.001"></div>
+                                    <div class="form-group"><label>Real Estate</label><input type="number" id="SIGMA_RealEstate" value="0.040" step="0.001"></div>
+                                    <div class="form-group"><label>Alternatives</label><input type="number" id="SIGMA_Alternatives" value="0.100" step="0.001"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Student-t Freiheitsgrade</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Interest Rate</label><input type="number" id="DOF_InterestRate" value="" placeholder="Normal"></div>
+                                    <div class="form-group"><label>Gov Bonds</label><input type="number" id="DOF_GovBonds" value="" placeholder="Normal"></div>
+                                    <div class="form-group"><label>Corp Bonds</label><input type="number" id="DOF_CorpBonds" value="" placeholder="Normal"></div>
+                                    <div class="form-group"><label>Equities</label><input type="number" id="DOF_Equities" value="5"></div>
+                                    <div class="form-group"><label>Real Estate</label><input type="number" id="DOF_RealEstate" value="6"></div>
+                                    <div class="form-group"><label>Alternatives</label><input type="number" id="DOF_Alternatives" value="5"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Mean Reversion (Aktien)</div>
+                                <div class="form-grid">
+                                    <div class="form-group checkbox-group"><label>Aktiviert</label><input type="checkbox" id="EQUITY_MEAN_REVERSION_ENABLED" checked></div>
+                                    <div class="form-group"><label>LT Return</label><input type="number" id="EQUITY_LONG_TERM_ANNUAL_RETURN" value="0.05" step="0.01"></div>
+                                    <div class="form-group"><label>Stärke</label><input type="number" id="EQUITY_MEAN_REVERSION_STRENGTH" value="0.10" step="0.01"></div>
+                                    <div class="form-group"><label>Schwelle</label><input type="number" id="EQUITY_MEAN_REVERSION_THRESHOLD" value="-0.30" step="0.05"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-content" id="tab-bonds">
+                            <div class="section"><div class="section-title">Staatsanleihen</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Init. Duration</label><input type="number" id="INITIAL_GOV_BOND_DURATION" value="22.0" step="0.5"></div>
+                                    <div class="form-group"><label>Modus</label><select id="GOV_BOND_DURATION_MODE"><option value="fixed">Fixed</option><option value="fixed_reset">Fixed Reset</option><option value="liability_matching">Liability Matching</option><option value="cashflow_matching" selected>Cashflow Matching</option></select></div>
+                                    <div class="form-group checkbox-group"><label>Reset</label><input type="checkbox" id="GOV_BOND_DURATION_RESET_ENABLED"></div>
+                                    <div class="form-group"><label>Reset Interval</label><input type="number" id="GOV_BOND_DURATION_RESET_INTERVAL" value="5"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Unternehmensanleihen</div>
+                                <div class="form-grid">
+                                    <div class="form-group"><label>Init. Duration</label><input type="number" id="INITIAL_CORP_BOND_DURATION" value="8.0" step="0.5"></div>
+                                    <div class="form-group"><label>Modus</label><select id="CORP_BOND_DURATION_MODE"><option value="fixed">Fixed</option><option value="fixed_reset">Fixed Reset</option><option value="liability_matching">Liability Matching</option><option value="cashflow_matching" selected>Cashflow Matching</option></select></div>
+                                    <div class="form-group checkbox-group"><label>Reset</label><input type="checkbox" id="CORP_BOND_DURATION_RESET_ENABLED" checked></div>
+                                    <div class="form-group"><label>Reset Interval</label><input type="number" id="CORP_BOND_DURATION_RESET_INTERVAL" value="4"></div>
+                                    <div class="form-group"><label>Credit Spread</label><input type="number" id="CORP_BOND_CREDIT_SPREAD" value="0.005" step="0.001"></div>
+                                    <div class="form-group"><label>Default Prob</label><input type="number" id="CORP_BOND_DEFAULT_PROBABILITY" value="0.003" step="0.001"></div>
+                                    <div class="form-group"><label>LGD</label><input type="number" id="CORP_BOND_LOSS_GIVEN_DEFAULT" value="0.40" step="0.05"></div>
+                                    <div class="form-group"><label>Exposure</label><input type="number" id="CORP_BOND_DEFAULT_EXPOSURE" value="0.02" step="0.01"></div>
+                                </div>
+                            </div>
+                            <div class="section"><div class="section-title">Zinsabsicherung (Interest Rate Cap)</div>
+                                <p style="font-size:.65rem;color:var(--muted);margin-bottom:.5rem">
+                                    Absicherung gegen Zinsschock im ersten Jahr. Notional = Bond-Allokation × Anfangsvermögen.
+                                </p>
+                                <div class="form-grid">
+                                    <div class="form-group checkbox-group"><label>Cap aktiviert</label><input type="checkbox" id="INTEREST_RATE_CAP_ENABLED"></div>
+                                    <div class="form-group"><label>Strike (BP über r₁)</label><input type="number" id="INTEREST_RATE_CAP_STRIKE" value="0.0075" step="0.0005" title="Strike-Level in Dezimal (0.0075 = 75 Basispunkte)"></div>
+                                    <div class="form-group"><label>Prämie (% Notional)</label><input type="number" id="INTEREST_RATE_CAP_PREMIUM" value="0.002" step="0.0001" title="Einmalige Prämie als % des Notionals (0.002 = 0.2% = 20 BP)"></div>
+                                    <div class="form-group"><label>Laufzeit (Jahre)</label><input type="number" id="INTEREST_RATE_CAP_DURATION" value="1" min="1" max="5" title="Anzahl Jahre, in denen der Cap aktiv ist"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-content" id="tab-corr">
+                            <div class="section"><div class="section-title">Korrelationsmatrix</div>
+                                <div class="corr">
+                                    <div class="corr-row"><div class="corr-lbl"></div><div class="corr-cell hdr">IntRate</div><div class="corr-cell hdr">Gov</div><div class="corr-cell hdr">Corp</div><div class="corr-cell hdr">Eq</div><div class="corr-cell hdr">RE</div><div class="corr-cell hdr">Alt</div></div>
+                                    <div class="corr-row"><div class="corr-lbl">IntRate</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_IntRate_GovBonds" value="0.90" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_CorpBonds" value="0.80" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_Equities" value="0.20" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_RealEstate" value="0.40" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_Alternatives" value="0.30" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">GovBonds</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_GovBonds_CorpBonds" value="0.85" step="0.05"></div><div class="corr-cell"><input id="CORR_GovBonds_Equities" value="0.30" step="0.05"></div><div class="corr-cell"><input id="CORR_GovBonds_RealEstate" value="0.20" step="0.05"></div><div class="corr-cell"><input id="CORR_GovBonds_Alternatives" value="0.40" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">CorpBonds</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_CorpBonds_Equities" value="0.45" step="0.05"></div><div class="corr-cell"><input id="CORR_CorpBonds_RealEstate" value="0.30" step="0.05"></div><div class="corr-cell"><input id="CORR_CorpBonds_Alternatives" value="0.50" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">Equities</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_Equities_RealEstate" value="0.50" step="0.05"></div><div class="corr-cell"><input id="CORR_Equities_Alternatives" value="0.60" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">RealEstate</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_RealEstate_Alternatives" value="0.30" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">Alternatives</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar">
+                <div class="card">
+                    <div class="card-head"><span>Modus</span></div>
+                    <div class="card-body">
+                        <div class="mode-toggle">
+                            <button class="mode-btn active" data-mode="simulation"><div class="icon">📊</div><div>Simulation</div></button>
+                            <button class="mode-btn" data-mode="optimization"><div class="icon">🎯</div><div>Optimierung</div></button>
+                        </div>
+                        <div class="panel active" id="panel-simulation">
+                            <p style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem">Monte-Carlo-Simulation mit Chart-Ausgabe</p>
+                            <button class="btn btn-primary" id="startSimBtn" style="width:100%">▶ Simulation starten</button>
+                        </div>
+                        <div class="panel" id="panel-optimization">
+                            <div class="section" style="margin-bottom:.75rem"><div class="section-title">Methode</div>
+                                <div class="opt-method">
+                                    <button class="method-btn active" data-method="bayesian"><div class="name">Bayesian</div></button>
+                                    <button class="method-btn" data-method="random"><div class="name">Random</div></button>
+                                    <button class="method-btn" data-method="grid"><div class="name">Grid</div></button>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin-bottom:.5rem"><label>Iterationen</label><input type="number" id="iterations" value="50"></div>
+                            <div class="actions"><button class="btn btn-primary" id="startOptBtn">▶ Start</button><button class="btn btn-danger" id="stopBtn" disabled>■ Stop</button></div>
+                        </div>
+                        <div class="progress" id="progressBar" style="display:none"><div class="progress-bar"></div></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-head"><span>Konsole</span><button class="btn btn-secondary" style="padding:.2rem .5rem;font-size:.65rem" id="clearConsole">Löschen</button></div>
+                    <div class="card-body" style="padding:0"><div class="console" id="console"><div class="console-line info">ALM Optimizer bereit.</div></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-head"><span>Rentnerbestand</span><button class="btn btn-secondary" style="padding:.2rem .5rem;font-size:.65rem" id="togglePopGen">Generator</button></div>
+                    <div class="card-body">
+                        <div id="uploadSection">
+                            <div class="upload" id="uploadZone"><div class="icon">📁</div><p>CSV hochladen</p></div>
+                            <input type="file" id="fileInput" accept=".csv" style="display:none">
+                        </div>
+                        <div id="generatorSection" style="display:none">
+                            <div class="form-grid" style="gap:.5rem">
+                                <div class="form-group"><label>Anzahl</label><input type="number" id="gen_n_population" value="50" min="10" max="1000"></div>
+                                <div class="form-group"><label>Ø Alter</label><input type="number" id="gen_age_mean" value="69" min="60" max="85"></div>
+                                <div class="form-group"><label>σ Alter</label><input type="number" id="gen_age_std" value="8" min="1" max="15"></div>
+                                <div class="form-group"><label>Min Alter</label><input type="number" id="gen_min_age" value="65" min="55" max="75"></div>
+                                <div class="form-group"><label>Max Alter</label><input type="number" id="gen_max_age" value="100" min="85" max="110"></div>
+                                <div class="form-group"><label>% Frauen</label><input type="number" id="gen_pct_female" value="0.55" step="0.05" min="0" max="1"></div>
+                                <div class="form-group"><label>% Verheir.</label><input type="number" id="gen_pct_married" value="0.50" step="0.05" min="0" max="1"></div>
+                                <div class="form-group"><label>% Ledig</label><input type="number" id="gen_pct_single" value="0.40" step="0.05" min="0" max="1"></div>
+                                <div class="form-group"><label>% Verwitw.</label><input type="number" id="gen_pct_widowed" value="0.10" step="0.05" min="0" max="1"></div>
+                                <div class="form-group"><label>Ø Rente</label><input type="number" id="gen_pension_mean" value="30000" step="1000"></div>
+                                <div class="form-group"><label>σ Rente</label><input type="number" id="gen_pension_std" value="10000" step="1000"></div>
+                                <div class="form-group"><label>Min Rente</label><input type="number" id="gen_pension_min" value="10000" step="1000"></div>
+                                <div class="form-group"><label>Max Rente</label><input type="number" id="gen_pension_max" value="80000" step="1000"></div>
+                            </div>
+                            <button class="btn btn-primary" id="generatePopBtn" style="width:100%;margin-top:.75rem">🎲 Generieren</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-head"><span>Ergebnisse</span><button class="btn btn-secondary" style="padding:.2rem .5rem;font-size:.65rem" id="refreshFiles">⟳</button></div>
+                    <div class="card-body"><div class="files" id="fileList"><div class="empty"><div class="icon">📂</div><p>Keine Dateien</p></div></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Analysis View -->
+    <div class="main-view" id="view-analysis">
+        <div class="analysis-container">
+            <div class="card">
+                <div class="card-head"><span>Pfadanalyse</span></div>
+                <div class="card-body">
+                    <div class="analysis-header" id="analysisHeader">
+                        <div class="analysis-select">
+                            <select id="analysisFileSelect">
+                                <option value="">-- CSV-Datei wählen --</option>
+                            </select>
+                        </div>
+                        <div class="year-slider">
+                            <label style="font-size:.75rem;color:var(--muted)">Jahr:</label>
+                            <input type="range" id="yearSlider" min="1" max="40" value="40">
+                            <span class="year-val" id="yearValue">40</span>
+                        </div>
+                    </div>
+                    <div id="boxplotView" style="margin-top:1rem">
+                        <div style="display:grid;grid-template-columns:1fr 320px;gap:1rem">
+                            <div class="boxplot-container">
+                                <canvas id="boxplotCanvas"></canvas>
+                            </div>
+                            <div class="params-box" id="boxplotParams">
+                                <div class="params-title">Simulationsparameter</div>
+                                <div class="params-grid" id="boxplotParamsGrid" style="grid-template-columns:1fr">
+                                    <div class="param-item"><span class="param-label">Datei wählen...</span></div>
+                                </div>
+                                <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+                                    <div class="params-title">Risikokennzahlen (Jahr <span id="riskYear">40</span>)</div>
+                                    <div class="params-grid" id="riskMetricsGrid" style="grid-template-columns:1fr">
+                                        <div class="param-item"><span class="param-label">-</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p style="font-size:.7rem;color:var(--muted);text-align:center;margin-top:.5rem">
+                            Klicke auf einen Punkt, um den Pfad detailliert zu analysieren
+                        </p>
+                    </div>
+                    <div class="path-analysis" id="pathAnalysisView">
+                        <div class="path-header">
+                            <span class="path-title" id="pathTitle">Pfad #1</span>
+                            <button class="back-btn" id="backToBoxplot">← Zurück zur Übersicht</button>
+                        </div>
+                        <div class="path-charts">
+                            <div class="path-chart">
+                                <div class="path-chart-title">Performance & Zinsen</div>
+                                <div class="path-chart-box"><canvas id="chartPerformance"></canvas></div>
+                                <div class="legend-inline">
+                                    <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div>Return +</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div>Return −</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div>r1_t (rechte Skala)</div>
+                                </div>
+                            </div>
+                            <div class="path-chart">
+                                <div class="path-chart-title">Witwenrenten</div>
+                                <div class="path-chart-box"><canvas id="chartWidows"></canvas></div>
+                                <div class="legend-inline">
+                                    <div class="legend-item"><div class="legend-dot" style="background:#a371f7"></div>Anz. Witwen</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:rgba(163,113,247,0.2)"></div>P5-P95 Band</div>
+                                </div>
+                            </div>
+                            <div class="path-chart">
+                                <div class="path-chart-title">Vermögen & Verpflichtungen</div>
+                                <div class="path-chart-box"><canvas id="chartAssets"></canvas></div>
+                                <div class="legend-inline">
+                                    <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div>V_t (Vermögen)</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div>W_t (Verpfl.)</div>
+                                </div>
+                            </div>
+                            <div class="path-chart">
+                                <div class="path-chart-title">Deckungsgrad</div>
+                                <div class="path-chart-box"><canvas id="chartDG"></canvas></div>
+                                <div class="legend-inline">
+                                    <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div>Deckungsgrad</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:rgba(210,153,34,0.2)"></div>P5-P95 Band</div>
+                                </div>
+                            </div>
+                            <div class="path-chart">
+                                <div class="path-chart-title">Rentnerbestand</div>
+                                <div class="path-chart-box"><canvas id="chartPensioners"></canvas></div>
+                                <div class="legend-inline">
+                                    <div class="legend-item"><div class="legend-dot" style="background:#79c0ff"></div>Anz. Rentner</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:rgba(121,192,255,0.2)"></div>P5-P95 Band</div>
+                                </div>
+                            </div>
+                            <div class="path-chart">
+                                <div class="path-chart-title">Pfad-Kennzahlen (Gesamtsimulation)</div>
+                                <div class="path-chart-box"><canvas id="chartSummary"></canvas></div>
+                                <div class="legend-inline" style="justify-content:center">
+                                    <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div>P5</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div>Median</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div>P95</div>
+                                    <div class="legend-item"><div class="legend-dot" style="background:#a371f7"></div>Dieser Pfad</div>
+                                </div>
+                            </div>
+                            <div class="params-box">
+                                <div class="params-title">Simulationsparameter</div>
+                                <div class="params-grid" id="paramsGrid"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Fullscreen Chart Modal -->
+<div class="chart-modal" id="chartModal">
+    <div class="chart-modal-header">
+        <span class="chart-modal-title" id="chartModalTitle">Chart</span>
+        <button class="chart-modal-close" id="chartModalClose">✕ Schliessen (ESC)</button>
+    </div>
+    <div class="chart-modal-body">
+        <canvas id="chartModalCanvas"></canvas>
+    </div>
+    <div class="chart-modal-legend" id="chartModalLegend"></div>
+</div>
+
+<script>
+let ws=null,selectedMethod='bayesian',selectedMode='simulation',isRunning=false,dgChart=null;
+let boxplotChart=null,chartPerformance=null,chartWidows=null,chartAssets=null,chartDG=null,chartPensioners=null;
+let chartModal=null;
+let currentAnalysisFile=null,currentAnalysisData=null,currentPathData=null;
+let chartSummary=null;
+const statusDot=document.getElementById('statusDot'),statusText=document.getElementById('statusText'),
+      consoleEl=document.getElementById('console'),progressBar=document.getElementById('progressBar'),
+      chartCard=document.getElementById('chartCard');
+
+function connectWS(){
+    const p=location.protocol==='https:'?'wss:':'ws:';
+    ws=new WebSocket(`${p}//${location.host}/ws`);
+    ws.onopen=()=>log('WebSocket verbunden','success');
+    ws.onmessage=e=>handleMsg(JSON.parse(e.data));
+    ws.onclose=()=>{log('Reconnecting...','warning');setTimeout(connectWS,3000)};
+}
+
+function handleMsg(d){
+    if(d.type==='log')log(d.message);
+    else if(d.type==='status'){updateStatus(d.running,d.message);if(d.success!==undefined){log(d.message,d.success?'success':'warning');refreshFiles();refreshAnalysisFiles()}}
+    else if(d.type==='error'){log(d.message,'error');updateStatus(false,'Fehler')}
+    else if(d.type==='simulation_complete'){log(d.message,'success');updateStatus(false,'Bereit');if(d.chart_data)renderChart(d.chart_data);refreshFiles();refreshAnalysisFiles()}
+}
+
+function log(m,t=''){const l=document.createElement('div');l.className='console-line '+t;l.textContent=m;consoleEl.appendChild(l);consoleEl.scrollTop=consoleEl.scrollHeight}
+
+function updateStatus(r,m){isRunning=r;statusDot.className='dot'+(r?' running':'');statusText.textContent=m||(r?'Läuft...':'Bereit');document.getElementById('startSimBtn').disabled=r;document.getElementById('startOptBtn').disabled=r;document.getElementById('stopBtn').disabled=!r;progressBar.style.display=r?'block':'none'}
+
+function collectConfig(){const c={};document.querySelectorAll('input[id]').forEach(i=>{if(i.type==='checkbox')c[i.id]=i.checked;else if(i.type==='number'){const v=i.value.trim();c[i.id]=v===''?null:parseFloat(v)}else c[i.id]=i.value});document.querySelectorAll('select[id]').forEach(s=>{c[s.id]=s.value});return c}
+
+function renderChart(data){
+    chartCard.style.display='block';
+    const ctx=document.getElementById('dgChart').getContext('2d');
+    if(dgChart)dgChart.destroy();
+    const datasets=[];
+    const maxP=Math.min(data.paths.length,50);
+    for(let i=0;i<maxP;i++){
+        const p=data.paths[i];
+        const col=p.has_underfunding?'rgba(248,81,73,0.2)':'rgba(88,166,255,0.15)';
+        datasets.push({data:p.deckungsgrad.map(v=>v*100),borderColor:col,backgroundColor:'transparent',borderWidth:1,pointRadius:0,tension:0.3});
+    }
+    datasets.push({label:'Mittelwert',data:data.statistics.mean_dg.map(v=>v*100),borderColor:'#58a6ff',backgroundColor:'transparent',borderWidth:3,pointRadius:0,tension:0.3});
+    datasets.push({label:'P5',data:data.statistics.p5_dg.map(v=>v*100),borderColor:'#f85149',backgroundColor:'transparent',borderWidth:2,borderDash:[5,5],pointRadius:0,tension:0.3});
+    datasets.push({label:'P95',data:data.statistics.p95_dg.map(v=>v*100),borderColor:'#3fb950',backgroundColor:'transparent',borderWidth:2,borderDash:[5,5],pointRadius:0,tension:0.3});
+    dgChart=new Chart(ctx,{type:'line',data:{labels:data.years,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b949e'}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b949e'},min:Math.max(0,Math.min(...data.statistics.p5_dg)*100-10),max:200}}}});
+    document.getElementById('statPaths').textContent=data.n_paths;
+    const rm=data.risk_metrics||{};
+    const wDefault=rm.W_at_default_mean;
+    document.getElementById('statWDefault').textContent=wDefault?Math.round(wDefault).toLocaleString('de-CH')+' CHF':'n/a';
+    document.getElementById('statWDefault').className='stat-val '+(wDefault?'neg':'neu');
+    const uf=(rm.prob_underfunding||0)*100;
+    document.getElementById('statUF').textContent=uf.toFixed(1)+'%';
+    document.getElementById('statUF').className='stat-val '+(uf>5?'neg':'pos');
+    const def=(rm.prob_default||0)*100;
+    document.getElementById('statDefault').textContent=def.toFixed(1)+'%';
+    document.getElementById('statDefault').className='stat-val '+(def>1?'neg':'pos');
+}
+
+function startSim(){if(!ws||ws.readyState!==1){log('WS nicht verbunden','error');return}ws.send(JSON.stringify({action:'start_simulation',config:collectConfig()}));log('Starte Simulation...','info')}
+function startOpt(){if(!ws||ws.readyState!==1){log('WS nicht verbunden','error');return}const it=parseInt(document.getElementById('iterations').value)||50;ws.send(JSON.stringify({action:'start_optimization',config:collectConfig(),method:selectedMethod,iterations:it}));log('Starte '+selectedMethod+' Optimierung...','info')}
+async function stopProc(){try{await fetch('/api/stop',{method:'POST'});log('Stoppe...','warning')}catch(e){log('Stop-Fehler','error')}}
+
+async function refreshFiles(){try{const r=await fetch('/api/files');const f=await r.json();if(f.length===0){document.getElementById('fileList').innerHTML='<div class="empty"><div class="icon">📂</div><p>Keine Dateien</p></div>';return}document.getElementById('fileList').innerHTML=f.slice(0,8).map(x=>'<div class="file"><div class="file-info"><div class="file-icon">📄</div><div><div class="file-name">'+x.name+'</div><div class="file-meta">'+(x.size/1024).toFixed(1)+' KB</div></div></div><button class="file-dl" onclick="location.href=\'/api/download/'+x.name+'\'">↓</button></div>').join('')}catch(e){log('Fehler Dateien','error')}}
+
+async function uploadFile(f){const fd=new FormData();fd.append('file',f);try{log('Upload '+f.name+'...','info');const r=await fetch('/api/upload-population',{method:'POST',body:fd});const d=await r.json();if(d.success){log('Upload OK','success');refreshFiles()}else log('Upload fehlgeschlagen','error')}catch(e){log('Upload-Fehler','error')}}
+async function refreshAnalysisFiles(){
+    try{
+        const r=await fetch('/api/analysis-files');
+        const files=await r.json();
+        const sel=document.getElementById('analysisFileSelect');
+        const current=sel.value;
+        sel.innerHTML='<option value="">-- CSV-Datei wählen --</option>';
+        files.forEach(f=>{
+            const opt=document.createElement('option');
+            opt.value=f.name;
+            opt.textContent=f.name+' ('+(f.size/1024/1024).toFixed(1)+' MB)';
+            sel.appendChild(opt);
+        });
+        if(current&&files.find(f=>f.name===current))sel.value=current;
+    }catch(e){console.error('Error loading analysis files:',e)}
+}
+
+async function loadAnalysisData(filename,year){
+    if(!filename)return;
+    currentAnalysisFile=filename;
+    try{
+        const r=await fetch(`/api/analysis/${filename}?year=${year}`);
+        const data=await r.json();
+        if(data.error){console.error(data.error);return}
+        currentAnalysisData=data;
+        document.getElementById('yearSlider').max=data.max_year;
+        renderBoxplot(data);
+        renderBoxplotParams(data.params, data.risk_metrics, data.year);
+    }catch(e){console.error('Error loading analysis:',e)}
+}
+
+function renderBoxplotParams(params, risk, year) {
+    const grid = document.getElementById('boxplotParamsGrid');
+    
+    // Format duration mode for display
+    const formatMode = (mode) => {
+        if (mode === 'liability_matching') return 'Liab.Match';
+        if (mode === 'fixed_reset') return 'Fixed+Reset';
+        if (mode === 'fixed') return 'Fixed';
+        return mode || '-';
+    };
+    
+    const items = [
+        ['Pfade', params.n_paths],
+        ['Horizont', params.t_horizon + ' Jahre'],
+        ['Gov Bonds', ((params.weight_gov_bonds || 0) * 100).toFixed(0) + '%'],
+        ['Corp Bonds', ((params.weight_corp_bonds || 0) * 100).toFixed(0) + '%'],
+        ['Equities', ((params.weight_equities || 0) * 100).toFixed(0) + '%'],
+        ['Real Estate', ((params.weight_real_estate || 0) * 100).toFixed(0) + '%'],
+        ['Alternatives', ((params.weight_alternatives || 0) * 100).toFixed(0) + '%'],
+        ['μ Equities', ((params.mu_equities || 0) * 100).toFixed(1) + '%'],
+        ['σ Equities', ((params.sigma_equities || 0) * 100).toFixed(1) + '%'],
+        ['───── Duration ─────', ''],
+        ['Gov Bond Mode', formatMode(params.gov_bond_duration_mode)],
+        ['Gov Bond Init.Dur.', (params.initial_gov_bond_duration || 0).toFixed(1) + ' J'],
+        ['Gov Bond Reset', params.gov_bond_duration_reset_enabled ? 'Ja (' + params.gov_bond_duration_reset_interval + 'J)' : 'Nein'],
+        ['Corp Bond Mode', formatMode(params.corp_bond_duration_mode)],
+        ['Corp Bond Init.Dur.', (params.initial_corp_bond_duration || 0).toFixed(1) + ' J'],
+        ['Corp Bond Reset', params.corp_bond_duration_reset_enabled ? 'Ja (' + params.corp_bond_duration_reset_interval + 'J)' : 'Nein'],
+        ['Tech Rate Duration', (params.technical_rate_duration || 0).toFixed(1) + ' J'],
+        ['Liab. Discount Spread', ((params.liability_discount_spread || 0) * 100).toFixed(2) + '%'],
+        ['───── Bestand ─────', ''],
+        ['Anzahl', params.bestand_n_total + ' Pers.'],
+        ['Ø Alter', params.bestand_avg_age?.toFixed(1) || '-'],
+        ['W₀', ((params.bestand_W0 || 0) / 1e6).toFixed(2) + ' Mio'],
+        ['Tech Rate Floor', ((params.technical_rate_floor || 0) * 100).toFixed(2) + '%'],
+        ['Reserve Rate', ((params.general_reserve_rate || 0) * 100).toFixed(1) + '%']
+    ];
+    grid.innerHTML = items.map(([l, v]) => {
+        if (v === '') return `<div class="param-item" style="background:transparent;justify-content:center"><span class="param-label" style="color:var(--muted);font-size:.6rem">${l}</span></div>`;
+        return `<div class="param-item"><span class="param-label">${l}</span><span class="param-value">${v}</span></div>`;
+    }).join('');
+
+    document.getElementById('riskYear').textContent = year;
+    const riskGrid = document.getElementById('riskMetricsGrid');
+    const probDefault = (risk.prob_default * 100).toFixed(1);
+    const probUF = (risk.prob_underfunding * 100).toFixed(1);
+    const riskItems = [
+        ['P(Default)', `<span style="color:${risk.prob_default > 0.01 ? 'var(--red)' : 'var(--green)'}">${probDefault}%</span> (${risk.n_default}/${risk.n_paths})`],
+        ['P(Unterdeckung)', `<span style="color:${risk.prob_underfunding > 0.05 ? 'var(--red)' : 'var(--green)'}">${probUF}%</span> (${risk.n_underfunding}/${risk.n_paths})`],
+        ['Ø DG', (risk.dg_mean * 100).toFixed(1) + '%'],
+        ['Median DG', (risk.dg_median * 100).toFixed(1) + '%'],
+        ['P5 DG', (risk.dg_p5 * 100).toFixed(1) + '%'],
+        ['P95 DG', (risk.dg_p95 * 100).toFixed(1) + '%']
+    ];
+    if (risk.n_default > 0) {
+        riskItems.push(['Ø Defizit bei Default', ((risk.avg_deficit_at_default || 0) / 1e6).toFixed(2) + ' Mio']);
+    }
+    riskGrid.innerHTML = riskItems.map(([l, v]) => `<div class="param-item"><span class="param-label">${l}</span><span class="param-value">${v}</span></div>`).join('');
+}
+
+function renderBoxplot(data){
+    const ctx=document.getElementById('boxplotCanvas').getContext('2d');
+    if(boxplotChart)boxplotChart.destroy();
+    const paths=data.paths;
+    const bp=data.boxplot;
+    const scatterData=paths.map(p=>({x:1+Math.random()*0.4-0.2,y:p.surplus/1e6,path_nr:p.path_nr,surplus:p.surplus,dg:p.deckungsgrad}));
+    const pointColors=scatterData.map(d=>d.y<0?'rgba(248,81,73,0.7)':'rgba(63,185,80,0.6)');
+    
+    boxplotChart=new Chart(ctx,{
+        type:'scatter',
+        data:{datasets:[{label:'Pfade',data:scatterData,backgroundColor:pointColors,borderColor:pointColors.map(c=>c.replace('0.7','1').replace('0.6','1')),borderWidth:1,pointRadius:5,pointHoverRadius:8}]},
+        options:{
+            responsive:true,maintainAspectRatio:false,
+            plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){const d=ctx.raw;return[`Pfad #${d.path_nr}`,`V-W: ${(d.surplus/1e6).toFixed(2)} Mio CHF`,`DG: ${(d.dg*100).toFixed(1)}%`]}}}},
+            scales:{x:{display:false,min:0.5,max:1.5},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b949e',callback:v=>v.toFixed(1)+' Mio'},title:{display:true,text:'V_t - W_t (CHF)',color:'#8b949e'}}},
+            onClick:(e,elements)=>{if(elements.length>0){const idx=elements[0].index;const pathNr=scatterData[idx].path_nr;loadPathAnalysis(currentAnalysisFile,pathNr)}}
+        },
+        plugins:[{
+            id:'boxplotOverlay',
+            afterDraw:chart=>{
+                const ctx=chart.ctx;const bp=data.boxplot;const yScale=chart.scales.y;const xScale=chart.scales.x;
+                const x=xScale.getPixelForValue(1);const boxW=60;
+                const y1=yScale.getPixelForValue(bp.q1/1e6);const y3=yScale.getPixelForValue(bp.q3/1e6);
+                const yMed=yScale.getPixelForValue(bp.median/1e6);
+                const yWL=yScale.getPixelForValue(bp.whisker_low/1e6);const yWH=yScale.getPixelForValue(bp.whisker_high/1e6);
+                ctx.save();ctx.strokeStyle='#58a6ff';ctx.lineWidth=2;ctx.fillStyle='rgba(88,166,255,0.1)';
+                ctx.fillRect(x-boxW/2,y3,boxW,y1-y3);ctx.strokeRect(x-boxW/2,y3,boxW,y1-y3);
+                ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x-boxW/2,yMed);ctx.lineTo(x+boxW/2,yMed);ctx.stroke();
+                ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x,y1);ctx.lineTo(x,yWL);ctx.moveTo(x,y3);ctx.lineTo(x,yWH);ctx.stroke();
+                ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x-15,yWL);ctx.lineTo(x+15,yWL);ctx.moveTo(x-15,yWH);ctx.lineTo(x+15,yWH);ctx.stroke();
+                const y0=yScale.getPixelForValue(0);ctx.strokeStyle='rgba(248,81,73,0.6)';ctx.lineWidth=2;ctx.setLineDash([8,4]);
+                ctx.beginPath();ctx.moveTo(xScale.left,y0);ctx.lineTo(xScale.right,y0);ctx.stroke();
+                ctx.restore();
+            }
+        }]
+    });
+}
+
+async function loadPathAnalysis(filename,pathNr){
+    try{
+        const r=await fetch(`/api/analysis/${filename}/path/${pathNr}`);
+        const data=await r.json();
+        if(data.error){console.error(data.error);return}
+        currentPathData=data;
+        document.getElementById('pathTitle').textContent=`Pfad #${pathNr}`;
+        document.getElementById('boxplotView').style.display='none';
+        document.getElementById('analysisHeader').style.display='none';
+        document.getElementById('pathAnalysisView').classList.add('active');
+        renderPathCharts(data);
+        renderParams(data.params);
+        if(data.summary_metrics) renderSummaryCharts(data.summary_metrics);
+    }catch(e){console.error('Error loading path:',e)}
+}
+
+function renderPathCharts(data){
+    const years=data.years;const pd=data.path_data;const stats=data.statistics;
+    const chartOpts={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b949e',maxTicksLimit:10}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b949e'}}}};
+
+    if(chartPerformance)chartPerformance.destroy();
+    const ctx1=document.getElementById('chartPerformance').getContext('2d');
+    const perfColors=pd.portfolio_return.map(v=>v>=0?'rgba(63,185,80,0.8)':'rgba(248,81,73,0.8)');
+    const perfData=pd.portfolio_return.map(v=>v*100);
+    const r1Data=pd.r1_t.map(v=>v*100);
+    const perfMax=Math.max(...perfData.map(Math.abs));
+    const r1Max=Math.max(...r1Data.map(Math.abs));
+    const perfRange=Math.ceil(perfMax/5)*5+5;
+    const r1Range=Math.ceil(r1Max*10)/10+0.5;
+    chartPerformance=new Chart(ctx1,{type:'bar',data:{labels:years,datasets:[
+        {label:'Portfolio Return',data:perfData,backgroundColor:perfColors,borderColor:perfColors.map(c=>c.replace('0.8','1')),borderWidth:1,yAxisID:'y',order:2},
+        {label:'r1_t',data:r1Data,backgroundColor:'rgba(210,153,34,0.8)',borderColor:'rgba(210,153,34,1)',borderWidth:1,yAxisID:'y1',order:1}
+    ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+        x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b949e',maxTicksLimit:10}},
+        y:{position:'left',min:-perfRange,max:perfRange,grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#3fb950',callback:v=>v.toFixed(0)+'%'},title:{display:true,text:'Portfolio Return',color:'#3fb950',font:{size:10}}},
+        y1:{position:'right',min:-r1Range,max:r1Range,grid:{drawOnChartArea:false},ticks:{color:'#d29922',callback:v=>v.toFixed(1)+'%'},title:{display:true,text:'Basiszins r1_t',color:'#d29922',font:{size:10}}}
+    }}});
+
+    if(chartWidows)chartWidows.destroy();
+    const ctx1b=document.getElementById('chartWidows').getContext('2d');
+    chartWidows=new Chart(ctx1b,{type:'line',data:{labels:years,datasets:[
+        {label:'P5-P95 Band',data:stats.num_widows.p95,fill:'+1',backgroundColor:'rgba(163,113,247,0.15)',borderColor:'transparent',pointRadius:0,tension:0.3},
+        {label:'',data:stats.num_widows.p5,fill:false,borderColor:'transparent',pointRadius:0,tension:0.3},
+        {label:'Median',data:stats.num_widows.median,borderColor:'rgba(163,113,247,0.5)',backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,tension:0.3},
+        {label:'Witwen',data:pd.num_widows,borderColor:'#a371f7',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.3}
+    ]},options:chartOpts});
+
+    if(chartAssets)chartAssets.destroy();
+    const ctx2=document.getElementById('chartAssets').getContext('2d');
+    chartAssets=new Chart(ctx2,{type:'line',data:{labels:years,datasets:[
+        {label:'V_t',data:pd.V_t.map(v=>v/1e6),borderColor:'#3fb950',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.3},
+        {label:'V_t P5',data:stats.V_t.p5.map(v=>v/1e6),borderColor:'rgba(63,185,80,0.3)',backgroundColor:'transparent',borderWidth:1,borderDash:[3,3],pointRadius:0,tension:0.3},
+        {label:'V_t P95',data:stats.V_t.p95.map(v=>v/1e6),borderColor:'rgba(63,185,80,0.3)',backgroundColor:'transparent',borderWidth:1,borderDash:[3,3],pointRadius:0,tension:0.3},
+        {label:'W_t',data:pd.W_t.map(v=>v/1e6),borderColor:'#f85149',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.3},
+        {label:'W_t P5',data:stats.W_t.p5.map(v=>v/1e6),borderColor:'rgba(248,81,73,0.3)',backgroundColor:'transparent',borderWidth:1,borderDash:[3,3],pointRadius:0,tension:0.3},
+        {label:'W_t P95',data:stats.W_t.p95.map(v=>v/1e6),borderColor:'rgba(248,81,73,0.3)',backgroundColor:'transparent',borderWidth:1,borderDash:[3,3],pointRadius:0,tension:0.3}
+    ]},options:{...chartOpts,scales:{...chartOpts.scales,y:{...chartOpts.scales.y,ticks:{...chartOpts.scales.y.ticks,callback:v=>v.toFixed(0)+' Mio'}}}}});
+
+    if(chartDG)chartDG.destroy();
+    const ctx2b=document.getElementById('chartDG').getContext('2d');
+    chartDG=new Chart(ctx2b,{type:'line',data:{labels:years,datasets:[
+        {label:'P5-P95 Band',data:stats.deckungsgrad.p95.map(v=>Math.min(v,2)),fill:'+1',backgroundColor:'rgba(210,153,34,0.15)',borderColor:'transparent',pointRadius:0,tension:0.3},
+        {label:'',data:stats.deckungsgrad.p5.map(v=>Math.min(v,2)),fill:false,borderColor:'transparent',pointRadius:0,tension:0.3},
+        {label:'Median',data:stats.deckungsgrad.median.map(v=>Math.min(v,2)),borderColor:'rgba(210,153,34,0.5)',backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,tension:0.3},
+        {label:'DG',data:pd.deckungsgrad.map(v=>Math.min(v,2)),borderColor:'#d29922',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.3}
+    ]},options:{...chartOpts,scales:{...chartOpts.scales,y:{...chartOpts.scales.y,min:0,max:2,ticks:{...chartOpts.scales.y.ticks,callback:v=>(v*100).toFixed(0)+'%'}}}}});
+
+    if(chartPensioners)chartPensioners.destroy();
+    const ctx3=document.getElementById('chartPensioners').getContext('2d');
+    chartPensioners=new Chart(ctx3,{type:'line',data:{labels:years,datasets:[
+        {label:'P5-P95 Band',data:stats.num_pensioners.p95,fill:'+1',backgroundColor:'rgba(121,192,255,0.15)',borderColor:'transparent',pointRadius:0,tension:0.3},
+        {label:'',data:stats.num_pensioners.p5,fill:false,borderColor:'transparent',pointRadius:0,tension:0.3},
+        {label:'Median',data:stats.num_pensioners.median,borderColor:'rgba(121,192,255,0.5)',backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,tension:0.3},
+        {label:'Rentner',data:pd.num_pensioners,borderColor:'#79c0ff',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.3}
+    ]},options:chartOpts});
+}
+
+function renderParams(params){
+    const grid=document.getElementById('paramsGrid');
+    const items=[
+        ['Pfade',params.n_paths],['Horizont',params.t_horizon+' Jahre'],
+        ['Gov Bonds',((params.weight_gov_bonds||0)*100).toFixed(0)+'%'],['Corp Bonds',((params.weight_corp_bonds||0)*100).toFixed(0)+'%'],
+        ['Equities',((params.weight_equities||0)*100).toFixed(0)+'%'],['Real Estate',((params.weight_real_estate||0)*100).toFixed(0)+'%'],
+        ['Alternatives',((params.weight_alternatives||0)*100).toFixed(0)+'%'],['μ Equities',((params.mu_equities||0)*100).toFixed(1)+'%'],
+        ['σ Equities',((params.sigma_equities||0)*100).toFixed(1)+'%'],['Gov Bond Mode',params.gov_bond_duration_mode||'-'],
+        ['Corp Bond Mode',params.corp_bond_duration_mode||'-'],['Tech Rate Floor',((params.technical_rate_floor||0)*100).toFixed(2)+'%'],
+        ['Reserve Rate',((params.general_reserve_rate||0)*100).toFixed(1)+'%'],['Bestand',params.bestand_n_total+' Pers.'],
+        ['Ø Alter',params.bestand_avg_age?.toFixed(1)||'-'],['W₀',(params.bestand_W0/1e6)?.toFixed(2)+' Mio'||'-']
+    ];
+    grid.innerHTML=items.map(([l,v])=>`<div class="param-item"><span class="param-label">${l}</span><span class="param-value">${v}</span></div>`).join('');
+}
+
+function renderSummaryCharts(metrics) {
+    const path = metrics.path;
+    const all = metrics.all_paths;
+    
+    if (chartSummary) chartSummary.destroy();
+    const ctx = document.getElementById('chartSummary').getContext('2d');
+    
+    // Normalize values for display (different scales)
+    // Cashflow and Capital in Mio, Return in %
+    chartSummary = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Total Cashflow\n(Mio CHF)', 'Ø Portfolio Return\n(%)', 'Total Kapitalertrag\n(Mio CHF)'],
+            datasets: [
+                {
+                    label: 'P5',
+                    data: [
+                        all.total_cashflow.p5 / 1e6,
+                        all.avg_return.p5 * 100,
+                        all.total_capital_income.p5 / 1e6
+                    ],
+                    backgroundColor: 'rgba(248,81,73,0.7)',
+                    borderColor: '#f85149',
+                    borderWidth: 1,
+                    borderRadius: 3
+                },
+                {
+                    label: 'Median',
+                    data: [
+                        all.total_cashflow.median / 1e6,
+                        all.avg_return.median * 100,
+                        all.total_capital_income.median / 1e6
+                    ],
+                    backgroundColor: 'rgba(88,166,255,0.7)',
+                    borderColor: '#58a6ff',
+                    borderWidth: 1,
+                    borderRadius: 3
+                },
+                {
+                    label: 'P95',
+                    data: [
+                        all.total_cashflow.p95 / 1e6,
+                        all.avg_return.p95 * 100,
+                        all.total_capital_income.p95 / 1e6
+                    ],
+                    backgroundColor: 'rgba(63,185,80,0.7)',
+                    borderColor: '#3fb950',
+                    borderWidth: 1,
+                    borderRadius: 3
+                },
+                {
+                    label: 'Dieser Pfad',
+                    data: [
+                        path.total_cashflow / 1e6,
+                        path.avg_return * 100,
+                        path.total_capital_income / 1e6
+                    ],
+                    backgroundColor: 'rgba(163,113,247,0.9)',
+                    borderColor: '#a371f7',
+                    borderWidth: 2,
+                    borderRadius: 3
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { 
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const idx = ctx.dataIndex;
+                            let val = ctx.raw;
+                            if (idx === 1) return ctx.dataset.label + ': ' + val.toFixed(2) + '%';
+                            return ctx.dataset.label + ': ' + val.toFixed(1) + ' Mio';
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { 
+                    grid: { display: false }, 
+                    ticks: { color: '#8b949e', font: { size: 10 } }
+                },
+                y: { 
+                    grid: { color: 'rgba(255,255,255,0.05)' }, 
+                    ticks: { color: '#8b949e', font: { size: 9 } }
+                }
+            }
+        }
+    });
+}
+
+// Chart Modal Functions
+const chartConfigs = {
+    'chartPerformance': {title: 'Performance & Zinsen', legendItems: [{color:'#3fb950',label:'Return +'},{color:'#f85149',label:'Return −'},{color:'#d29922',label:'r1_t (rechte Skala)'}]},
+    'chartWidows': {title: 'Witwenrenten', legendItems: [{color:'#a371f7',label:'Anz. Witwen'},{color:'rgba(163,113,247,0.3)',label:'P5-P95 Band'}]},
+    'chartAssets': {title: 'Vermögen & Verpflichtungen', legendItems: [{color:'#3fb950',label:'V_t (Vermögen)'},{color:'#f85149',label:'W_t (Verpfl.)'}]},
+    'chartDG': {title: 'Deckungsgrad', legendItems: [{color:'#d29922',label:'Deckungsgrad'},{color:'rgba(210,153,34,0.3)',label:'P5-P95 Band'}]},
+    'chartPensioners': {title: 'Rentnerbestand', legendItems: [{color:'#79c0ff',label:'Anz. Rentner'},{color:'rgba(121,192,255,0.3)',label:'P5-P95 Band'}]}
+};
+
+function openChartModal(chartId) {
+    if (!currentPathData) return;
+    const config = chartConfigs[chartId];
+    if (!config) return;
+    
+    const modal = document.getElementById('chartModal');
+    document.getElementById('chartModalTitle').textContent = config.title + ' - Pfad #' + currentPathData.path_nr;
+    
+    // Build legend
+    const legendHtml = config.legendItems.map(item => 
+        `<div class="legend-item"><div class="legend-dot" style="background:${item.color}"></div>${item.label}</div>`
+    ).join('');
+    document.getElementById('chartModalLegend').innerHTML = legendHtml;
+    
+    modal.classList.add('active');
+    
+    // Render fullscreen chart
+    setTimeout(() => renderFullscreenChart(chartId), 50);
+}
+
+function closeChartModal() {
+    document.getElementById('chartModal').classList.remove('active');
+    if (chartModal) {
+        chartModal.destroy();
+        chartModal = null;
+    }
+}
+
+function renderFullscreenChart(chartId) {
+    const ctx = document.getElementById('chartModalCanvas').getContext('2d');
+    if (chartModal) chartModal.destroy();
+    
+    const data = currentPathData;
+    const years = data.years;
+    const pd = data.path_data;
+    const stats = data.statistics;
+    
+    const baseOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {legend: {display: false}},
+        scales: {
+            x: {grid: {color: 'rgba(255,255,255,0.1)'}, ticks: {color: '#8b949e', font: {size: 14}}},
+            y: {grid: {color: 'rgba(255,255,255,0.1)'}, ticks: {color: '#8b949e', font: {size: 14}}}
+        }
+    };
+    
+    let chartConfig;
+    
+    if (chartId === 'chartPerformance') {
+        const perfColors = pd.portfolio_return.map(v => v >= 0 ? 'rgba(63,185,80,0.8)' : 'rgba(248,81,73,0.8)');
+        const perfData = pd.portfolio_return.map(v => v * 100);
+        const r1Data = pd.r1_t.map(v => v * 100);
+        const perfMax = Math.max(...perfData.map(Math.abs));
+        const r1Max = Math.max(...r1Data.map(Math.abs));
+        const perfRange = Math.ceil(perfMax / 5) * 5 + 5;
+        const r1Range = Math.ceil(r1Max * 10) / 10 + 0.5;
+        chartConfig = {
+            type: 'bar',
+            data: {labels: years, datasets: [
+                {label: 'Portfolio Return', data: perfData, backgroundColor: perfColors, borderColor: perfColors.map(c => c.replace('0.8', '1')), borderWidth: 1, yAxisID: 'y'},
+                {label: 'r1_t', data: r1Data, backgroundColor: 'rgba(210,153,34,0.8)', borderColor: 'rgba(210,153,34,1)', borderWidth: 1, yAxisID: 'y1'}
+            ]},
+            options: {...baseOpts, scales: {
+                x: baseOpts.scales.x,
+                y: {position: 'left', min: -perfRange, max: perfRange, grid: {color: 'rgba(255,255,255,0.1)'}, ticks: {color: '#3fb950', font: {size: 14}, callback: v => v.toFixed(0) + '%'}, title: {display: true, text: 'Portfolio Return', color: '#3fb950', font: {size: 14}}},
+                y1: {position: 'right', min: -r1Range, max: r1Range, grid: {drawOnChartArea: false}, ticks: {color: '#d29922', font: {size: 14}, callback: v => v.toFixed(1) + '%'}, title: {display: true, text: 'Basiszins r1_t', color: '#d29922', font: {size: 14}}}
+            }}
+        };
+    } else if (chartId === 'chartWidows') {
+        chartConfig = {
+            type: 'line',
+            data: {labels: years, datasets: [
+                {label: 'P5-P95 Band', data: stats.num_widows.p95, fill: '+1', backgroundColor: 'rgba(163,113,247,0.15)', borderColor: 'transparent', pointRadius: 0, tension: 0.3},
+                {label: '', data: stats.num_widows.p5, fill: false, borderColor: 'transparent', pointRadius: 0, tension: 0.3},
+                {label: 'Median', data: stats.num_widows.median, borderColor: 'rgba(163,113,247,0.5)', backgroundColor: 'transparent', borderWidth: 2, borderDash: [4, 4], pointRadius: 0, tension: 0.3},
+                {label: 'Witwen', data: pd.num_widows, borderColor: '#a371f7', backgroundColor: 'transparent', borderWidth: 3, pointRadius: 0, tension: 0.3}
+            ]},
+            options: baseOpts
+        };
+    } else if (chartId === 'chartAssets') {
+        chartConfig = {
+            type: 'line',
+            data: {labels: years, datasets: [
+                {label: 'V_t', data: pd.V_t.map(v => v / 1e6), borderColor: '#3fb950', backgroundColor: 'transparent', borderWidth: 3, pointRadius: 0, tension: 0.3},
+                {label: 'V_t P5', data: stats.V_t.p5.map(v => v / 1e6), borderColor: 'rgba(63,185,80,0.3)', backgroundColor: 'transparent', borderWidth: 1, borderDash: [3, 3], pointRadius: 0, tension: 0.3},
+                {label: 'V_t P95', data: stats.V_t.p95.map(v => v / 1e6), borderColor: 'rgba(63,185,80,0.3)', backgroundColor: 'transparent', borderWidth: 1, borderDash: [3, 3], pointRadius: 0, tension: 0.3},
+                {label: 'W_t', data: pd.W_t.map(v => v / 1e6), borderColor: '#f85149', backgroundColor: 'transparent', borderWidth: 3, pointRadius: 0, tension: 0.3},
+                {label: 'W_t P5', data: stats.W_t.p5.map(v => v / 1e6), borderColor: 'rgba(248,81,73,0.3)', backgroundColor: 'transparent', borderWidth: 1, borderDash: [3, 3], pointRadius: 0, tension: 0.3},
+                {label: 'W_t P95', data: stats.W_t.p95.map(v => v / 1e6), borderColor: 'rgba(248,81,73,0.3)', backgroundColor: 'transparent', borderWidth: 1, borderDash: [3, 3], pointRadius: 0, tension: 0.3}
+            ]},
+            options: {...baseOpts, scales: {...baseOpts.scales, y: {...baseOpts.scales.y, ticks: {...baseOpts.scales.y.ticks, callback: v => v.toFixed(0) + ' Mio'}}}}
+        };
+    } else if (chartId === 'chartDG') {
+        chartConfig = {
+            type: 'line',
+            data: {labels: years, datasets: [
+                {label: 'P5-P95 Band', data: stats.deckungsgrad.p95.map(v => Math.min(v, 2)), fill: '+1', backgroundColor: 'rgba(210,153,34,0.15)', borderColor: 'transparent', pointRadius: 0, tension: 0.3},
+                {label: '', data: stats.deckungsgrad.p5.map(v => Math.min(v, 2)), fill: false, borderColor: 'transparent', pointRadius: 0, tension: 0.3},
+                {label: 'Median', data: stats.deckungsgrad.median.map(v => Math.min(v, 2)), borderColor: 'rgba(210,153,34,0.5)', backgroundColor: 'transparent', borderWidth: 2, borderDash: [4, 4], pointRadius: 0, tension: 0.3},
+                {label: 'DG', data: pd.deckungsgrad.map(v => Math.min(v, 2)), borderColor: '#d29922', backgroundColor: 'transparent', borderWidth: 3, pointRadius: 0, tension: 0.3}
+            ]},
+            options: {...baseOpts, scales: {...baseOpts.scales, y: {min: 0, max: 2, grid: {color: 'rgba(255,255,255,0.1)'}, ticks: {color: '#8b949e', font: {size: 14}, callback: v => (v * 100).toFixed(0) + '%'}}}}
+        };
+    } else if (chartId === 'chartPensioners') {
+        chartConfig = {
+            type: 'line',
+            data: {labels: years, datasets: [
+                {label: 'P5-P95 Band', data: stats.num_pensioners.p95, fill: '+1', backgroundColor: 'rgba(121,192,255,0.15)', borderColor: 'transparent', pointRadius: 0, tension: 0.3},
+                {label: '', data: stats.num_pensioners.p5, fill: false, borderColor: 'transparent', pointRadius: 0, tension: 0.3},
+                {label: 'Median', data: stats.num_pensioners.median, borderColor: 'rgba(121,192,255,0.5)', backgroundColor: 'transparent', borderWidth: 2, borderDash: [4, 4], pointRadius: 0, tension: 0.3},
+                {label: 'Rentner', data: pd.num_pensioners, borderColor: '#79c0ff', backgroundColor: 'transparent', borderWidth: 3, pointRadius: 0, tension: 0.3}
+            ]},
+            options: baseOpts
+        };
+    }
+    
+    if (chartConfig) {
+        chartModal = new Chart(ctx, chartConfig);
+    }
+}
+
+// Event Listeners
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active')}));
+document.querySelectorAll('.mode-btn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedMode=b.dataset.mode;document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));document.getElementById('panel-'+selectedMode).classList.add('active')}));
+document.querySelectorAll('.method-btn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.method-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedMethod=b.dataset.method}));
+document.querySelectorAll('.main-tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.main-tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.main-view').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('view-'+t.dataset.view).classList.add('active');if(t.dataset.view==='analysis')refreshAnalysisFiles()}));
+
+document.getElementById('startSimBtn').addEventListener('click',startSim);
+document.getElementById('startOptBtn').addEventListener('click',startOpt);
+document.getElementById('stopBtn').addEventListener('click',stopProc);
+document.getElementById('clearConsole').addEventListener('click',()=>{consoleEl.innerHTML='<div class="console-line info">Gelöscht.</div>'});
+document.getElementById('refreshFiles').addEventListener('click',refreshFiles);
+document.getElementById('hideChart').addEventListener('click',()=>{chartCard.style.display='none'});
+
+const uz=document.getElementById('uploadZone'),fi=document.getElementById('fileInput');
+uz.addEventListener('click',()=>fi.click());
+uz.addEventListener('dragover',e=>{e.preventDefault();uz.style.borderColor='var(--blue)'});
+uz.addEventListener('dragleave',()=>uz.style.borderColor='');
+uz.addEventListener('drop',e=>{e.preventDefault();uz.style.borderColor='';const f=e.dataTransfer.files[0];if(f&&f.name.endsWith('.csv'))uploadFile(f);else log('Nur CSV','warning')});
+fi.addEventListener('change',e=>{if(e.target.files[0])uploadFile(e.target.files[0])});
+
+document.getElementById('togglePopGen').addEventListener('click',()=>{
+    const up=document.getElementById('uploadSection');const gen=document.getElementById('generatorSection');const btn=document.getElementById('togglePopGen');
+    if(gen.style.display==='none'){gen.style.display='block';up.style.display='none';btn.textContent='Upload'}
+    else{gen.style.display='none';up.style.display='block';btn.textContent='Generator'}
+});
+
+document.getElementById('generatePopBtn').addEventListener('click',async()=>{
+    const fd=new FormData();
+    fd.append('n_population',document.getElementById('gen_n_population').value);
+    fd.append('age_mean',document.getElementById('gen_age_mean').value);
+    fd.append('age_std',document.getElementById('gen_age_std').value);
+    fd.append('min_age',document.getElementById('gen_min_age').value);
+    fd.append('max_age',document.getElementById('gen_max_age').value);
+    fd.append('pct_female',document.getElementById('gen_pct_female').value);
+    fd.append('pct_married',document.getElementById('gen_pct_married').value);
+    fd.append('pct_single',document.getElementById('gen_pct_single').value);
+    fd.append('pct_widowed',document.getElementById('gen_pct_widowed').value);
+    fd.append('pension_mean',document.getElementById('gen_pension_mean').value);
+    fd.append('pension_std',document.getElementById('gen_pension_std').value);
+    fd.append('pension_min',document.getElementById('gen_pension_min').value);
+    fd.append('pension_max',document.getElementById('gen_pension_max').value);
+    try{
+        log('Generiere Rentnerbestand...','info');
+        const r=await fetch('/api/generate-population',{method:'POST',body:fd});
+        const d=await r.json();
+        if(d.success){log('✅ '+d.message,'success');log('   Ø Alter: '+d.stats.avg_age.toFixed(1)+', % Frauen: '+d.stats.pct_female.toFixed(0)+'%, Ø Rente: '+Math.round(d.stats.avg_pension).toLocaleString('de-CH')+' CHF','info');refreshFiles()}
+        else{log('Fehler: '+d.message,'error')}
+    }catch(e){log('Generator-Fehler: '+e,'error')}
+});
+
+// Analysis event listeners
+document.getElementById('analysisFileSelect').addEventListener('change',e=>{
+    const filename=e.target.value;
+    const year=parseInt(document.getElementById('yearSlider').value);
+    if(filename)loadAnalysisData(filename,year);
+});
+
+document.getElementById('yearSlider').addEventListener('input',e=>{
+    document.getElementById('yearValue').textContent=e.target.value;
+});
+
+document.getElementById('yearSlider').addEventListener('change',e=>{
+    const year=parseInt(e.target.value);
+    if(currentAnalysisFile)loadAnalysisData(currentAnalysisFile,year);
+});
+
+document.getElementById('backToBoxplot').addEventListener('click',()=>{
+    document.getElementById('pathAnalysisView').classList.remove('active');
+    document.getElementById('boxplotView').style.display='block';
+    document.getElementById('analysisHeader').style.display='flex';
+});
+
+// Chart click handlers for fullscreen modal
+document.querySelectorAll('.path-chart').forEach(chart => {
+    const canvas = chart.querySelector('canvas');
+    if (canvas && canvas.id) {
+        chart.addEventListener('click', () => openChartModal(canvas.id));
+    }
+});
+
+// Modal close handlers
+document.getElementById('chartModalClose').addEventListener('click', closeChartModal);
+document.getElementById('chartModal').addEventListener('click', (e) => {
+    if (e.target.id === 'chartModal') closeChartModal();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeChartModal();
+});
+
+// Initialize
+connectWS();
+refreshFiles();
+</script>
+</body>
+</html>

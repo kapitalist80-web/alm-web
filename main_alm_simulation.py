@@ -871,6 +871,7 @@ def run_monte_carlo_path_full(args):
         'cashflow_rent': np.zeros(T_horizon),
         'cashflow_admin_fee': np.zeros(T_horizon),
         'cashflow_total': np.zeros(T_horizon),
+        'special_pension_payout': np.zeros(T_horizon),  # Sonder-Rente Auszahlungen
         # Detail-Renditen für Assets
         'gov_bonds_return': np.zeros(T_horizon),
         'corp_bonds_return': np.zeros(T_horizon),
@@ -1356,7 +1357,37 @@ def run_monte_carlo_path_full(args):
             results_path['deckungsgrad'][t] = 2.0
         else:
             results_path['deckungsgrad'][t] = 0.0
-        
+
+        # --- D2. SONDER-RENTE (Special Pension Payout) ---
+        # Prüfe ob Sonder-Rente aktiviert ist und Deckungsgrad über Schwelle liegt
+        special_pension_payout = 0.0
+        if (hasattr(cfg, 'SPECIAL_PENSION_ENABLED') and cfg.SPECIAL_PENSION_ENABLED and
+            W_t > 0 and results_path['deckungsgrad'][t] > getattr(cfg, 'SPECIAL_PENSION_THRESHOLD', 1.15)):
+
+            # Berechne erforderliche Auszahlung um Ziel-Deckungsgrad zu erreichen
+            # DG_target = V_target / W_t
+            # V_target = W_t * DG_target
+            # payout = V_t - V_target
+            target_dg = getattr(cfg, 'SPECIAL_PENSION_TARGET', 1.145)
+            target_V = W_t * target_dg
+            special_pension_payout = max(0.0, V_t - target_V)
+
+            # Reduziere Vermögen um Sonder-Rente
+            V_t -= special_pension_payout
+
+            # Aktualisiere Deckungsgrad nach Sonder-Rente
+            results_path['deckungsgrad'][t] = V_t / W_t if W_t > 0 else 0.0
+
+            # Erhöhe Cashflow um Sonder-Rente
+            CF_Total_t += special_pension_payout
+            results_path['cashflow_total'][t] = CF_Total_t
+
+            # Speichere V_t nach Sonder-Rente
+            results_path['V_t'][t] = V_t
+
+        # Speichere Sonder-Rente Auszahlung
+        results_path['special_pension_payout'][t] = special_pension_payout
+
         # --- E. UPDATE FÜR NÄCHSTE ITERATION ---
         
         # Speichere den Basiszins r1 für die nächste Iteration
@@ -1809,7 +1840,12 @@ def export_all_paths_csv(full_results, T_horizon, output_dir='data', population_
         'interest_rate_cap_strike': getattr(cfg, 'INTEREST_RATE_CAP_STRIKE', 0.0075),
         'interest_rate_cap_premium': getattr(cfg, 'INTEREST_RATE_CAP_PREMIUM', 0.002),
         'interest_rate_cap_duration': getattr(cfg, 'INTEREST_RATE_CAP_DURATION', 1),
-        
+
+        # Special Pension Payout (Sonder-Rente)
+        'special_pension_enabled': getattr(cfg, 'SPECIAL_PENSION_ENABLED', False),
+        'special_pension_threshold': getattr(cfg, 'SPECIAL_PENSION_THRESHOLD', 1.15),
+        'special_pension_target': getattr(cfg, 'SPECIAL_PENSION_TARGET', 1.145),
+
         # Simulation
         'n_paths': cfg.N_PATHS,
         't_horizon': cfg.T_HORIZON,
@@ -1859,12 +1895,13 @@ def export_all_paths_csv(full_results, T_horizon, output_dir='data', population_
                 'cashflow_rent': res['cashflow_rent'][t],
                 'cashflow_admin_fee': res['cashflow_admin_fee'][t],
                 'cashflow_total': res['cashflow_total'][t],
-                
+                'special_pension_payout': res['special_pension_payout'][t],
+
                 # Demographie
                 'liability_duration': res['liability_duration'][t],
                 'num_pensioners': res['num_pensioners'][t],
                 'num_widows': res['num_widows'][t],
-                
+
                 # Interest Rate Cap
                 'interest_rate_cap_payout': res['interest_rate_cap_payout'][t],
                 'interest_rate_cap_active': res['interest_rate_cap_active'][t],

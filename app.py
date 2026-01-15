@@ -48,7 +48,7 @@ optimization_running = False
 # Default config values
 DEFAULT_CONFIG = {
     # Simulation Parameters
-    "N_PATHS": 500,
+    "N_PATHS": 200,
     "T_HORIZON": 40,
     
     # Expected Returns (MU)
@@ -105,14 +105,14 @@ DEFAULT_CONFIG = {
     "BASIS_RATE_FLOOR": -0.01,
     
     # Government Bonds Duration
-    "INITIAL_GOV_BOND_DURATION": 18.0,
+    "INITIAL_GOV_BOND_DURATION": 22.0,
     "GOV_BOND_DURATION_MODE": "fixed",  # "fixed", "fixed_reset", "liability_matching"
     "GOV_BOND_DURATION_RESET_ENABLED": False,
     "GOV_BOND_DURATION_RESET_INTERVAL": 5,
     
     # Corporate Bonds
     "INITIAL_CORP_BOND_DURATION": 8.0,
-    "CORP_BOND_DURATION_MODE": "fixed_reset",  # "fixed", "fixed_reset", "liability_matching"
+    "CORP_BOND_DURATION_MODE": "liability_matching",  # "fixed", "fixed_reset", "liability_matching"
     "CORP_BOND_DURATION_RESET_ENABLED": True,
     "CORP_BOND_DURATION_RESET_INTERVAL": 4,
     "CORP_BOND_CREDIT_SPREAD": 0.005,

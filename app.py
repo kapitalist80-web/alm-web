@@ -140,6 +140,11 @@ DEFAULT_CONFIG = {
     "INTEREST_RATE_CAP_STRIKE": 0.0075,  # 75 Basispunkte über aktuellem Zinsniveau
     "INTEREST_RATE_CAP_PREMIUM": 0.002,  # 0.2% des Notionals (20 BP)
     "INTEREST_RATE_CAP_DURATION": 1,     # Laufzeit in Jahren
+
+    # Special Pension Payout (Sonder-Rente)
+    "SPECIAL_PENSION_ENABLED": False,
+    "SPECIAL_PENSION_THRESHOLD": 1.15,    # Deckungsgrad-Schwelle (115%)
+    "SPECIAL_PENSION_TARGET": 1.145,      # Ziel-Deckungsgrad nach Auszahlung (114.5%)
 }
 
 
@@ -332,6 +337,18 @@ INTEREST_RATE_CAP_ENABLED = {bool(params.get("INTEREST_RATE_CAP_ENABLED", False)
 INTEREST_RATE_CAP_STRIKE = {to_float(params.get("INTEREST_RATE_CAP_STRIKE"), 0.0075)}  # 75 BP über Basiszins
 INTEREST_RATE_CAP_PREMIUM = {to_float(params.get("INTEREST_RATE_CAP_PREMIUM"), 0.002)}  # 0.2% = 20 BP des Notionals
 INTEREST_RATE_CAP_DURATION = {to_int(params.get("INTEREST_RATE_CAP_DURATION"), 1)}  # Laufzeit in Jahren
+
+# ==============================================================================
+# 7. SPECIAL PENSION PAYOUT (Sonder-Rente)
+# ==============================================================================
+
+# Bei Deckungsgrad > SPECIAL_PENSION_THRESHOLD wird eine Sonder-Rente ausgezahlt
+# Die Höhe wird so gewählt, dass der Deckungsgrad auf ca. SPECIAL_PENSION_TARGET sinkt
+# Dadurch steigt der Cashflow entsprechend
+
+SPECIAL_PENSION_ENABLED = {bool(params.get("SPECIAL_PENSION_ENABLED", False))}
+SPECIAL_PENSION_THRESHOLD = {to_float(params.get("SPECIAL_PENSION_THRESHOLD"), 1.15)}  # Schwelle: 115%
+SPECIAL_PENSION_TARGET = {to_float(params.get("SPECIAL_PENSION_TARGET"), 1.145)}  # Ziel: 114.5%
 '''
     return config_content
 

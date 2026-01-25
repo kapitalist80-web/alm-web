@@ -489,58 +489,57 @@ def get_cfm_coupon_rate(cfm_tranches, year, r1_t, yield_curve_slope, credit_spre
 # DURATION-MANAGEMENT HELPER
 # ==============================================================================
 
-def get_duration_for_mode(mode, current_duration, initial_duration, liability_duration, 
-                          reset_enabled, reset_interval, year, is_liability_recalc_year,
+def get_duration_for_mode(mode, current_duration, initial_duration, liability_duration,
+                          reset_interval, year, is_liability_recalc_year,
                           cfm_tranches=None):
     """
     Berechnet die aktuelle Bond-Duration basierend auf dem gewählten Modus.
-    
+
     Args:
         mode: "fixed", "fixed_reset", "liability_matching", oder "cashflow_matching"
         current_duration: Aktuelle Duration aus dem Vorjahr
         initial_duration: Initiale Duration (für fixed/fixed_reset)
         liability_duration: Aktuelle Liability-Duration (für liability_matching)
-        reset_enabled: Ob Reset aktiviert ist (für fixed_reset)
         reset_interval: Reset-Intervall in Jahren (für fixed_reset)
         year: Aktuelles Simulationsjahr (t)
         is_liability_recalc_year: Ob Liability-Duration in diesem Jahr neu berechnet wird
         cfm_tranches: Cash Flow Matching Tranchen-Info (für cashflow_matching Modus)
                       Dict mit 'durations' und 'weights' pro Jahr
-    
+
     Returns:
         Tuple (neue_duration, duration_was_reset)
     """
     duration_was_reset = False
-    
+
     if mode == "liability_matching":
         # Bei Liability Matching: Duration JEDES JAHR an Liability-Duration anpassen
         new_duration = liability_duration
         duration_was_reset = True  # Wird jedes Jahr "gematcht"
-    
+
     elif mode == "cashflow_matching":
         # Bei Cash Flow Matching: Portfolio aus verschiedenen Tranchen mit dedizierter Duration
         # Die effektive Duration ist der gewichtete Durchschnitt der verbleibenden Tranchen
         # Tranchen laufen passiv ab - keine aktive Anpassung
-        
+
         if cfm_tranches is not None:
             new_duration = get_cfm_weighted_duration(cfm_tranches, year + 1)  # +1 weil für nächstes Jahr
         else:
             # Fallback: Reduziere um 1 pro Jahr
             new_duration = max(0.0, current_duration - 1.0)
-        
+
         # KEIN Reset bei CFM - passives Halten ist das Kernkonzept
         duration_was_reset = False
-    
+
     elif mode == "fixed_reset":
-        # Bisheriges Verhalten mit Reset
+        # Reset erfolgt automatisch im fixed_reset Modus
         new_duration = max(0.0, current_duration - 1.0)
-        if reset_enabled and year > 0 and ((year + 1) % reset_interval == 0):
+        if year > 0 and ((year + 1) % reset_interval == 0):
             new_duration = initial_duration
             duration_was_reset = True
-    
+
     else:  # "fixed" - kein Reset
         new_duration = max(0.0, current_duration - 1.0)
-    
+
     return new_duration, duration_was_reset
 
 
@@ -952,10 +951,8 @@ def run_monte_carlo_path_full(args):
             corp_cfm_tranches = calculate_cfm_tranches(expected_cfs, corp_bond_value)
             current_corp_bond_duration = get_cfm_weighted_duration(corp_cfm_tranches, 0)
 
-    # Reset-Parameter (nur relevant für fixed_reset Modus)
-    gov_reset_enabled = getattr(cfg, 'GOV_BOND_DURATION_RESET_ENABLED', cfg.DURATION_RESET_ENABLED)
+    # Reset-Intervall (nur relevant für fixed_reset Modus)
     gov_reset_interval = getattr(cfg, 'GOV_BOND_DURATION_RESET_INTERVAL', cfg.DURATION_RESET_INTERVAL)
-    corp_reset_enabled = getattr(cfg, 'CORP_BOND_DURATION_RESET_ENABLED', True)
     corp_reset_interval = getattr(cfg, 'CORP_BOND_DURATION_RESET_INTERVAL', 5)
     
     # Corporate Bond Parameter
@@ -1506,24 +1503,22 @@ def run_monte_carlo_path_full(args):
             current_duration=current_gov_bond_duration,
             initial_duration=getattr(cfg, 'INITIAL_GOV_BOND_DURATION', cfg.INITIAL_BOND_DURATION),
             liability_duration=current_liability_duration,
-            reset_enabled=gov_reset_enabled,
             reset_interval=gov_reset_interval,
             year=t,
             is_liability_recalc_year=is_liability_recalc_year,
-            cfm_tranches=gov_cfm_tranches  # NEU
+            cfm_tranches=gov_cfm_tranches
         )
-        
+
         # Duration-Management für Corporate Bonds (mit Duration-Mode)
         current_corp_bond_duration, corp_was_reset = get_duration_for_mode(
             mode=corp_duration_mode,
             current_duration=current_corp_bond_duration,
             initial_duration=getattr(cfg, 'INITIAL_CORP_BOND_DURATION', 5.0),
             liability_duration=current_liability_duration,
-            reset_enabled=corp_reset_enabled,
             reset_interval=corp_reset_interval,
             year=t,
             is_liability_recalc_year=is_liability_recalc_year,
-            cfm_tranches=corp_cfm_tranches  # NEU
+            cfm_tranches=corp_cfm_tranches
         )
         
         # === RESET BOND STATE BEI NEUANLAGE ===
@@ -1911,13 +1906,11 @@ def export_all_paths_csv(full_results, T_horizon, output_dir='data', population_
         # Government Bonds Duration
         'initial_gov_bond_duration': getattr(cfg, 'INITIAL_GOV_BOND_DURATION', cfg.INITIAL_BOND_DURATION),
         'gov_bond_duration_mode': getattr(cfg, 'GOV_BOND_DURATION_MODE', 'fixed_reset'),
-        'gov_bond_duration_reset_enabled': getattr(cfg, 'GOV_BOND_DURATION_RESET_ENABLED', cfg.DURATION_RESET_ENABLED),
         'gov_bond_duration_reset_interval': getattr(cfg, 'GOV_BOND_DURATION_RESET_INTERVAL', cfg.DURATION_RESET_INTERVAL),
-        
+
         # Corporate Bonds
         'initial_corp_bond_duration': getattr(cfg, 'INITIAL_CORP_BOND_DURATION', 5.0),
         'corp_bond_duration_mode': getattr(cfg, 'CORP_BOND_DURATION_MODE', 'fixed_reset'),
-        'corp_bond_duration_reset_enabled': getattr(cfg, 'CORP_BOND_DURATION_RESET_ENABLED', True),
         'corp_bond_duration_reset_interval': getattr(cfg, 'CORP_BOND_DURATION_RESET_INTERVAL', 5),
         'corp_bond_credit_spread': getattr(cfg, 'CORP_BOND_CREDIT_SPREAD', 0.01),
         'corp_bond_default_probability': getattr(cfg, 'CORP_BOND_DEFAULT_PROBABILITY', 0.003),
@@ -2124,8 +2117,7 @@ def plot_deckungsgrad_evolution(summary_results_dg):
              label='5%-Quantil (Risikokapital-Minimum)', color='#e3000f', linestyle='--', linewidth=2)
     
     plt.axhline(100, color='grey', linestyle='-', linewidth=1.5, alpha=0.7, label='100% Deckungsgrad (Gesetzliches Minimum)')
-    
-    reset_text = f"Reset alle {cfg.DURATION_RESET_INTERVAL} J." if cfg.DURATION_RESET_ENABLED else "Kein Reset"
+
     spread_bp = cfg.LIABILITY_DISCOUNT_SPREAD * 10000
     
     title_text = f'DG-Prognose (Start-DG: {start_dg:.1f}%, D_Bond: {cfg.INITIAL_BOND_DURATION:.1f}, Spread: {spread_bp:.0f} BP, N={cfg.N_PATHS:,})'

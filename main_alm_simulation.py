@@ -986,7 +986,22 @@ def run_monte_carlo_path_full(args):
     
     # Strike-Level: Basiszins bei t=0 + Strike-Aufschlag
     cap_strike_level = EXPECTED_BASIS_RATE + interest_rate_cap_strike
-    
+
+    # === SAMMELSTIFTUNG-MODUS PARAMETER ===
+    # Im Sammelstiftung-Modus wird alle X Jahre ein neuer Rentnerbestand hinzugefügt
+    sammelstiftung_enabled = getattr(cfg, 'SAMMELSTIFTUNG_ENABLED', False)
+    sammelstiftung_interval = getattr(cfg, 'SAMMELSTIFTUNG_INTERVAL', 5)
+
+    # Speichere den initialen Bestand für Sammelstiftung (Kopie des Originals ohne Statusänderungen)
+    initial_population_for_sammelstiftung = None
+    if sammelstiftung_enabled:
+        # Speichere Kopie des initialen Bestands für spätere Hinzufügungen
+        # Wir erstellen eine frische Kopie ohne die Status-Änderungen
+        initial_population_for_sammelstiftung = initial_population.copy()
+        # Setze Status zurück auf Initial-Werte
+        initial_population_for_sammelstiftung['Status'] = 'Active'
+        initial_population_for_sammelstiftung['YearOfDeath'] = 0
+
     # === NEU: Realistisches Bond-Modell State-Variablen ===
     # Coupon wird bei Kauf/Reset fixiert und bleibt konstant bis zur nächsten Neuanlage
     initial_gov_rate = EXPECTED_BASIS_RATE + current_gov_bond_duration * cfg.YIELD_CURVE_SLOPE
@@ -1387,6 +1402,90 @@ def run_monte_carlo_path_full(args):
 
         # Speichere Sonder-Rente Auszahlung
         results_path['special_pension_payout'][t] = special_pension_payout
+
+        # --- D3. SAMMELSTIFTUNG-MODUS (Neuer Bestand) ---
+        # Im Sammelstiftung-Modus wird alle X Jahre ein neuer Rentnerbestand hinzugefügt
+        # Voraussetzung: Deckungsgrad > 100% (V_t > W_t)
+        if (sammelstiftung_enabled and
+            initial_population_for_sammelstiftung is not None and
+            (t + 1) % sammelstiftung_interval == 0 and
+            V_t > W_t):
+
+            # 1. Erstelle eine frische Kopie des initialen Bestands
+            new_cohort = initial_population_for_sammelstiftung.copy()
+
+            # 2. Aktualisiere die IDs, damit sie eindeutig sind (füge Kohorten-Suffix hinzu)
+            cohort_suffix = f"_K{(t + 1) // sammelstiftung_interval}"
+            new_cohort['ID'] = new_cohort['ID'].astype(str) + cohort_suffix
+
+            # 3. Setze Status und andere Felder für die neuen Personen
+            new_cohort['Status'] = 'Active'
+            new_cohort['YearOfDeath'] = 0
+            new_cohort['CurrentPension'] = new_cohort['InitialPension']
+            new_cohort['SpouseInitialAge'] = new_cohort['Age'] + new_cohort['SpouseAgeDiff']
+
+            # 4. Berechne den Barwert der neuen Verpflichtungen zum aktuellen i_tech_t
+            new_W = calculate_liability_barwert_base(new_cohort, survival_table, i_tech_t,
+                                                      qx_arrays, cached_annuity_factors, cached_survival_probs)
+
+            # 5. Berechne den Beitrag zum Vermögen: Barwert + General Reserve Rate
+            new_V = new_W * (1 + cfg.GENERAL_RESERVE_RATE)
+
+            # 6. Aktualisiere W_t und V_t
+            W_t += new_W
+            V_t += new_V
+
+            # 7. Füge die neuen Personen zum population_state hinzu
+            population_state = pd.concat([population_state, new_cohort], ignore_index=True)
+
+            # 8. Aktualisiere CFM-Tranchen wenn Cash Flow Matching aktiv ist
+            if gov_duration_mode == "cashflow_matching" or corp_duration_mode == "cashflow_matching":
+                # Berechne erwartete Cashflows für den neuen erweiterten Bestand
+                updated_expected_cfs = calculate_expected_cashflows(
+                    population_state, survival_table, qx_arrays, T_horizon - t,
+                    include_spouse=True
+                )
+
+                # Government Bonds CFM Tranchen aktualisieren
+                if gov_duration_mode == "cashflow_matching":
+                    # Aktualisiere Gov Bond Portfolio Wert (neues Vermögen * Gov Bond Gewicht)
+                    new_gov_bond_value = new_V * cfg.WEIGHTS[1]
+                    gov_cfm_new = calculate_cfm_tranches(updated_expected_cfs, new_gov_bond_value)
+                    # Merge mit bestehenden Tranchen (addiere Werte)
+                    if gov_cfm_tranches is not None:
+                        for i in range(min(len(gov_cfm_tranches['values']), len(gov_cfm_new['values']))):
+                            gov_cfm_tranches['values'][i] += gov_cfm_new['values'][i]
+                        # Recalculate weights
+                        total_value = np.sum(gov_cfm_tranches['values'])
+                        if total_value > 0:
+                            gov_cfm_tranches['weights'] = gov_cfm_tranches['values'] / total_value
+                    else:
+                        gov_cfm_tranches = gov_cfm_new
+
+                # Corporate Bonds CFM Tranchen aktualisieren
+                if corp_duration_mode == "cashflow_matching":
+                    new_corp_bond_value = new_V * cfg.WEIGHTS[2]
+                    corp_cfm_new = calculate_cfm_tranches(updated_expected_cfs, new_corp_bond_value)
+                    if corp_cfm_tranches is not None:
+                        for i in range(min(len(corp_cfm_tranches['values']), len(corp_cfm_new['values']))):
+                            corp_cfm_tranches['values'][i] += corp_cfm_new['values'][i]
+                        total_value = np.sum(corp_cfm_tranches['values'])
+                        if total_value > 0:
+                            corp_cfm_tranches['weights'] = corp_cfm_tranches['values'] / total_value
+                    else:
+                        corp_cfm_tranches = corp_cfm_new
+
+            # 9. Aktualisiere gespeicherte Werte
+            results_path['W_t'][t] = W_t
+            results_path['V_t'][t] = V_t
+
+            # 10. Aktualisiere Deckungsgrad nach Sammelstiftung-Transaktion
+            if W_t > 0:
+                results_path['deckungsgrad'][t] = max(0.0, V_t / W_t)
+            elif V_t > 0:
+                results_path['deckungsgrad'][t] = 2.0
+            else:
+                results_path['deckungsgrad'][t] = 0.0
 
         # --- E. UPDATE FÜR NÄCHSTE ITERATION ---
         
@@ -1845,6 +1944,10 @@ def export_all_paths_csv(full_results, T_horizon, output_dir='data', population_
         'special_pension_enabled': getattr(cfg, 'SPECIAL_PENSION_ENABLED', False),
         'special_pension_threshold': getattr(cfg, 'SPECIAL_PENSION_THRESHOLD', 1.15),
         'special_pension_target': getattr(cfg, 'SPECIAL_PENSION_TARGET', 1.145),
+
+        # Sammelstiftung-Modus
+        'sammelstiftung_enabled': getattr(cfg, 'SAMMELSTIFTUNG_ENABLED', False),
+        'sammelstiftung_interval': getattr(cfg, 'SAMMELSTIFTUNG_INTERVAL', 5),
 
         # Simulation
         'n_paths': cfg.N_PATHS,

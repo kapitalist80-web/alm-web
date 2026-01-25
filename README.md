@@ -33,6 +33,7 @@ Das ALM Optimizer System ist eine umfassende Lösung zur Simulation und Optimier
 - Echtzeit-WebSocket-Updates
 - Interaktive Web-Oberfläche
 - Detaillierte Analyse und Visualisierung
+- **Sammelstiftung-Modus** für wachsende Pensionskassen
 
 ---
 
@@ -1376,6 +1377,7 @@ ws.onmessage = (event) => {
 | Zinsrate-Caps | Deaktiviert | Strike: 3%, Notional: 50% |
 | Spezielle Pensionen | Deaktiviert | Jahr: 5, Monate: 2.0 |
 | Mean-Reversion (Aktien) | Aktiviert | Speed: 0.20 |
+| Sammelstiftung-Modus | Deaktiviert | Intervall: 5 Jahre |
 
 ---
 
@@ -1540,6 +1542,58 @@ path_nr,jahr,Vermögen,Verbindlichkeiten,Deckungsgrad,Zinssatz,...
 
 ---
 
+---
+
+## Sammelstiftung-Modus (Collective Foundation Mode)
+
+Der Sammelstiftung-Modus simuliert das Wachstum einer Pensionskasse durch periodischen Zuwachs neuer Rentnerbestände.
+
+### Funktionsweise
+
+Im Sammelstiftung-Modus wird alle **X Jahre** (Standard: 5 Jahre) ein neuer Rentnerbestand hinzugefügt:
+
+1. **Voraussetzung:** Der Deckungsgrad muss > 100% sein (V_t > W_t)
+2. **Neuer Bestand:** Entspricht dem initialen Bestand aus `rentnerbestand_initial.csv`
+3. **Barwert-Berechnung:** Die neuen Verpflichtungen werden zum aktuellen technischen Zinssatz `i_tech_t` diskontiert
+4. **Vermögenszuwachs:** Dem Vermögen wird der Barwert × (1 + General Reserve Rate) hinzugefügt
+5. **CFM-Anpassung:** Bei Cash Flow Matching werden die Tranchen entsprechend aktualisiert
+
+### Mathematische Beschreibung
+
+Bei einer Sammelstiftung-Transaktion in Jahr t:
+
+```
+W_new = Barwert(neuer_Bestand, i_tech_t)  # Neue Verpflichtungen
+V_new = W_new × (1 + GENERAL_RESERVE_RATE)  # Neues Vermögen inkl. Reserve
+
+W_t := W_t + W_new  # Aktualisierte Verpflichtungen
+V_t := V_t + V_new  # Aktualisiertes Vermögen
+```
+
+### Parameter
+
+| Parameter | Standard | Beschreibung |
+|-----------|----------|--------------|
+| `SAMMELSTIFTUNG_ENABLED` | `False` | Aktiviert den Sammelstiftung-Modus |
+| `SAMMELSTIFTUNG_INTERVAL` | `5` | Intervall in Jahren für neue Bestände |
+
+### Verwendung im Web-Interface
+
+1. Wähle den Tab **"Allgemein"** in den Parametern
+2. Scrolle zum Abschnitt **"Sammelstiftung-Modus"**
+3. Aktiviere **"Sammelstiftung aktiviert"**
+4. Setze das gewünschte **Intervall** (Standard: 5 Jahre)
+5. Starte die Simulation
+
+### Hinweise
+
+- Die Transaktion findet nur statt, wenn der Deckungsgrad > 100% ist
+- Der neue Bestand erhält eindeutige IDs (Original-ID + Kohorten-Suffix)
+- Bei Cash Flow Matching werden die neuen Cashflows entsprechend angelegt
+- Die General Reserve Rate gilt auch für den neuen Bestand
+
+---
+
 ## Lizenz
 
 [Bitte Lizenz hinzufügen]
@@ -1549,6 +1603,13 @@ path_nr,jahr,Vermögen,Verbindlichkeiten,Deckungsgrad,Zinssatz,...
 [Bitte Kontaktinformationen hinzufügen]
 
 ## Changelog
+
+### Version 1.1.0 (2026-01-25)
+- **NEU:** Sammelstiftung-Modus für wachsende Pensionskassen
+  - Periodischer Zuwachs neuer Rentnerbestände (alle X Jahre)
+  - Barwert-Diskontierung zum aktuellen technischen Zinssatz
+  - Automatische CFM-Tranchen-Aktualisierung bei Cash Flow Matching
+  - Transaktion nur bei Deckungsgrad > 100%
 
 ### Version 1.0.0 (2026-01-22)
 - Initiale Version

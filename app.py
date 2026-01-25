@@ -145,6 +145,10 @@ DEFAULT_CONFIG = {
     "SPECIAL_PENSION_ENABLED": False,
     "SPECIAL_PENSION_THRESHOLD": 1.15,    # Deckungsgrad-Schwelle (115%)
     "SPECIAL_PENSION_TARGET": 1.145,      # Ziel-Deckungsgrad nach Auszahlung (114.5%)
+
+    # Sammelstiftung-Modus (Collective Foundation Mode)
+    "SAMMELSTIFTUNG_ENABLED": False,
+    "SAMMELSTIFTUNG_INTERVAL": 5,         # Alle X Jahre kommt ein neuer Bestand hinzu
 }
 
 
@@ -349,6 +353,22 @@ INTEREST_RATE_CAP_DURATION = {to_int(params.get("INTEREST_RATE_CAP_DURATION"), 1
 SPECIAL_PENSION_ENABLED = {bool(params.get("SPECIAL_PENSION_ENABLED", False))}
 SPECIAL_PENSION_THRESHOLD = {to_float(params.get("SPECIAL_PENSION_THRESHOLD"), 1.15)}  # Schwelle: 115%
 SPECIAL_PENSION_TARGET = {to_float(params.get("SPECIAL_PENSION_TARGET"), 1.145)}  # Ziel: 114.5%
+
+# ==============================================================================
+# 8. SAMMELSTIFTUNG-MODUS (Collective Foundation Mode)
+# ==============================================================================
+
+# Im Sammelstiftung-Modus wird alle SAMMELSTIFTUNG_INTERVAL Jahre ein neuer
+# Rentnerbestand hinzugefügt. Die Transaktion findet nur statt, wenn der
+# Deckungsgrad > 100% ist (V_t > W_t).
+#
+# Der neue Bestand entspricht dem initialen Bestand aus rentnerbestand_initial.csv.
+# Der Barwert wird zum aktuellen technischen Zinssatz i_tech_t diskontiert.
+# Dem Vermögen wird der Barwert plus die General Reserve Rate hinzugefügt.
+# Bei Cash Flow Matching werden die neuen CFM-Tranchen entsprechend aktualisiert.
+
+SAMMELSTIFTUNG_ENABLED = {bool(params.get("SAMMELSTIFTUNG_ENABLED", False))}
+SAMMELSTIFTUNG_INTERVAL = {to_int(params.get("SAMMELSTIFTUNG_INTERVAL"), 5)}  # Alle X Jahre
 '''
     return config_content
 

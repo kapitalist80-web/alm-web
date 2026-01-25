@@ -93,3 +93,31 @@ INTEREST_RATE_CAP_ENABLED = False
 INTEREST_RATE_CAP_STRIKE = 0.0075  # 75 BP über Basiszins
 INTEREST_RATE_CAP_PREMIUM = 0.002  # 0.2% = 20 BP des Notionals
 INTEREST_RATE_CAP_DURATION = 1  # Laufzeit in Jahren
+
+# ==============================================================================
+# 7. SPECIAL PENSION PAYOUT (Sonder-Rente)
+# ==============================================================================
+
+# Bei Deckungsgrad > SPECIAL_PENSION_THRESHOLD wird eine Sonder-Rente ausgezahlt
+# Die Höhe wird so gewählt, dass der Deckungsgrad auf ca. SPECIAL_PENSION_TARGET sinkt
+# Dadurch steigt der Cashflow entsprechend
+
+SPECIAL_PENSION_ENABLED = False
+SPECIAL_PENSION_THRESHOLD = 1.15  # Schwelle: 115%
+SPECIAL_PENSION_TARGET = 1.145  # Ziel: 114.5%
+
+# ==============================================================================
+# 8. SAMMELSTIFTUNG-MODUS (Collective Foundation Mode)
+# ==============================================================================
+
+# Im Sammelstiftung-Modus wird alle SAMMELSTIFTUNG_INTERVAL Jahre ein neuer
+# Rentnerbestand hinzugefügt. Die Transaktion findet nur statt, wenn der
+# Deckungsgrad > 100% ist (V_t > W_t).
+#
+# Der neue Bestand entspricht dem initialen Bestand aus rentnerbestand_initial.csv.
+# Der Barwert wird zum aktuellen technischen Zinssatz i_tech_t diskontiert.
+# Dem Vermögen wird der Barwert plus die General Reserve Rate hinzugefügt.
+# Bei Cash Flow Matching werden die neuen CFM-Tranchen entsprechend aktualisiert.
+
+SAMMELSTIFTUNG_ENABLED = True
+SAMMELSTIFTUNG_INTERVAL = 5  # Alle X Jahre

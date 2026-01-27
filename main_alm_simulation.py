@@ -877,6 +877,14 @@ def run_monte_carlo_path_full(args):
         'equities_return': np.zeros(T_horizon),
         'realestate_return': np.zeros(T_horizon),
         'alternatives_return': np.zeros(T_horizon),
+        # Infrastructure Debt (Alternatives) Bond-Komponenten
+        'alt_bonds_coupon': np.zeros(T_horizon),
+        'alt_bonds_duration_effect': np.zeros(T_horizon),
+        'alt_bonds_default_loss': np.zeros(T_horizon),
+        'alt_bonds_market_value': np.zeros(T_horizon),
+        'alt_bonds_fixed_coupon': np.zeros(T_horizon),
+        'alt_bond_duration': np.zeros(T_horizon),
+        'i_alt_bonds_t': np.zeros(T_horizon),
         # Government Bond-Komponenten
         'gov_bonds_coupon': np.zeros(T_horizon),
         'gov_bonds_duration_effect': np.zeros(T_horizon),
@@ -923,16 +931,19 @@ def run_monte_carlo_path_full(args):
     # Duration-Management für beide Bond-Typen
     current_gov_bond_duration = getattr(cfg, 'INITIAL_GOV_BOND_DURATION', cfg.INITIAL_BOND_DURATION)
     current_corp_bond_duration = getattr(cfg, 'INITIAL_CORP_BOND_DURATION', 5.0)
-    
+    current_alt_bond_duration = getattr(cfg, 'INITIAL_ALT_BOND_DURATION', 30.0)
+
     # Duration-Modi aus Config
     gov_duration_mode = getattr(cfg, 'GOV_BOND_DURATION_MODE', 'fixed_reset')
     corp_duration_mode = getattr(cfg, 'CORP_BOND_DURATION_MODE', 'fixed_reset')
+    alt_duration_mode = getattr(cfg, 'ALT_BOND_DURATION_MODE', 'fixed')
     
     # === NEU: CASH FLOW MATCHING INITIALISIERUNG ===
     gov_cfm_tranches = None
     corp_cfm_tranches = None
-    
-    if gov_duration_mode == "cashflow_matching" or corp_duration_mode == "cashflow_matching":
+    alt_cfm_tranches = None
+
+    if gov_duration_mode == "cashflow_matching" or corp_duration_mode == "cashflow_matching" or alt_duration_mode == "cashflow_matching":
         # Berechne erwartete Cashflows EINMALIG zu Beginn
         expected_cfs = calculate_expected_cashflows(
             population_state, survival_table, qx_arrays, T_horizon,
@@ -951,15 +962,28 @@ def run_monte_carlo_path_full(args):
             corp_cfm_tranches = calculate_cfm_tranches(expected_cfs, corp_bond_value)
             current_corp_bond_duration = get_cfm_weighted_duration(corp_cfm_tranches, 0)
 
+        # Infrastructure Debt (Alternatives) CFM Tranchen
+        if alt_duration_mode == "cashflow_matching":
+            alt_bond_value = V0 * cfg.WEIGHTS[5]  # Alternatives Allokation
+            alt_cfm_tranches = calculate_cfm_tranches(expected_cfs, alt_bond_value)
+            current_alt_bond_duration = get_cfm_weighted_duration(alt_cfm_tranches, 0)
+
     # Reset-Intervall (nur relevant für fixed_reset Modus)
     gov_reset_interval = getattr(cfg, 'GOV_BOND_DURATION_RESET_INTERVAL', cfg.DURATION_RESET_INTERVAL)
     corp_reset_interval = getattr(cfg, 'CORP_BOND_DURATION_RESET_INTERVAL', 5)
+    alt_reset_interval = getattr(cfg, 'ALT_BOND_DURATION_RESET_INTERVAL', 5)
     
     # Corporate Bond Parameter
     corp_credit_spread = getattr(cfg, 'CORP_BOND_CREDIT_SPREAD', 0.01)
     corp_default_prob = getattr(cfg, 'CORP_BOND_DEFAULT_PROBABILITY', 0.003)
     corp_lgd = getattr(cfg, 'CORP_BOND_LOSS_GIVEN_DEFAULT', 0.40)
     corp_default_exposure = getattr(cfg, 'CORP_BOND_DEFAULT_EXPOSURE', 0.02)
+
+    # Infrastructure Debt (Alternatives) Bond Parameter
+    alt_credit_spread = getattr(cfg, 'ALT_BOND_CREDIT_SPREAD', 0.015)
+    alt_default_prob = getattr(cfg, 'ALT_BOND_DEFAULT_PROBABILITY', 0.013)
+    alt_lgd = getattr(cfg, 'ALT_BOND_LOSS_GIVEN_DEFAULT', 0.35)
+    alt_default_exposure = getattr(cfg, 'ALT_BOND_DEFAULT_EXPOSURE', 0.02)
     
     # === INTEREST RATE CAP PARAMETER ===
     # Der Cap schützt gegen steigende Zinsen im ersten Jahr
@@ -1003,6 +1027,7 @@ def run_monte_carlo_path_full(args):
     # Coupon wird bei Kauf/Reset fixiert und bleibt konstant bis zur nächsten Neuanlage
     initial_gov_rate = EXPECTED_BASIS_RATE + current_gov_bond_duration * cfg.YIELD_CURVE_SLOPE
     initial_corp_rate = EXPECTED_BASIS_RATE + current_corp_bond_duration * cfg.YIELD_CURVE_SLOPE + corp_credit_spread
+    initial_alt_rate = EXPECTED_BASIS_RATE + current_alt_bond_duration * cfg.YIELD_CURVE_SLOPE + alt_credit_spread
     
     # Bei CFM: Gewichteter durchschnittlicher Coupon der Tranchen
     if gov_duration_mode == "cashflow_matching" and gov_cfm_tranches is not None:
@@ -1016,12 +1041,20 @@ def run_monte_carlo_path_full(args):
                                                       cfg.YIELD_CURVE_SLOPE, corp_credit_spread)
     else:
         corp_bond_fixed_coupon = initial_corp_rate
-    
+
+    if alt_duration_mode == "cashflow_matching" and alt_cfm_tranches is not None:
+        alt_bond_fixed_coupon = get_cfm_coupon_rate(alt_cfm_tranches, 0, EXPECTED_BASIS_RATE,
+                                                     cfg.YIELD_CURVE_SLOPE, alt_credit_spread)
+    else:
+        alt_bond_fixed_coupon = initial_alt_rate
+
     gov_bond_market_value = 1.0    # Marktwert relativ zu Par (startet bei 100%)
     corp_bond_market_value = 1.0   # Marktwert relativ zu Par (startet bei 100%)
-    
+    alt_bond_market_value = 1.0    # Marktwert relativ zu Par (startet bei 100%)
+
     gov_bond_initial_duration = current_gov_bond_duration   # Duration bei Kauf (für Pull-to-Par)
     corp_bond_initial_duration = current_corp_bond_duration # Duration bei Kauf (für Pull-to-Par)
+    alt_bond_initial_duration = current_alt_bond_duration   # Duration bei Kauf (für Pull-to-Par)
     
     # Index-Mapping für die neue Asset-Struktur
     # [InterestRate, GovBonds, CorpBonds, Equities, RealEstate, Alternatives]
@@ -1181,10 +1214,63 @@ def run_monte_carlo_path_full(args):
         
         # === B. PORTFOLIO-RENDITE ===
         
-        # Rendite der Non-Bond Asset-Klassen (Equities, RealEstate, Alternatives)
+        # === A3. INFRASTRUCTURE DEBT (Alternatives) - BOND-MODELL ===
+        # Gleiche Logik wie Corp Bonds, mit eigenen Parametern (Spread, Duration, LGD, Default Prob)
+
+        i_alt_bonds_t = r1_t + current_alt_bond_duration * cfg.YIELD_CURVE_SLOPE + alt_credit_spread
+        results_path['i_alt_bonds_t'][t] = i_alt_bonds_t
+
+        r_Alternatives_t = 0.0
+        alt_duration_effect = 0.0
+        alt_default_loss = 0.0
+        alt_pull_to_par = 0.0
+
+        if current_alt_bond_duration > 0:
+            # 1. COUPON-RENDITE (bezogen auf aktuellen Marktwert)
+            alt_coupon_return = alt_bond_fixed_coupon / alt_bond_market_value
+
+            # 2. DURATION-EFFEKT
+            if abs(delta_r1) > 1e-10:
+                alt_convexity = (current_alt_bond_duration**2 + current_alt_bond_duration) / ((1 + i_alt_bonds_t)**2)
+                alt_duration_component = -current_alt_bond_duration * delta_r1 / (1 + i_alt_bonds_t)
+                alt_convexity_component = 0.5 * alt_convexity * (delta_r1 ** 2)
+                alt_duration_effect = alt_duration_component + alt_convexity_component
+                alt_duration_effect = max(-0.50, min(alt_duration_effect, 0.50))
+
+            # 3. PULL-TO-PAR EFFEKT
+            alt_pull_to_par_absolute = 0.0
+            if alt_bond_initial_duration > 0 and current_alt_bond_duration > 0:
+                deviation_from_par = 1.0 - alt_bond_market_value
+                alt_pull_to_par_absolute = deviation_from_par / current_alt_bond_duration
+                alt_pull_to_par_absolute = max(-0.10, min(alt_pull_to_par_absolute, 0.10))
+
+            # 4. DEFAULT-VERLUST
+            if np.random.rand() < alt_default_prob:
+                alt_default_loss = alt_default_exposure * alt_lgd
+
+            # Update Marktwert
+            mv_after_duration = alt_bond_market_value * (1 + alt_duration_effect)
+            new_alt_market_value = mv_after_duration + alt_pull_to_par_absolute
+            new_alt_market_value = max(0.5, min(new_alt_market_value, 1.5))
+
+            alt_pull_to_par = alt_pull_to_par_absolute / alt_bond_market_value if alt_bond_market_value > 0 else 0.0
+
+            alt_market_value_return = (new_alt_market_value - alt_bond_market_value) / alt_bond_market_value
+
+            # GESAMTRENDITE = Coupon + Marktwertänderung - Default-Verlust
+            r_Alternatives_t = alt_coupon_return + alt_market_value_return - alt_default_loss
+
+            alt_bond_market_value = new_alt_market_value
+
+            results_path['alt_bonds_coupon'][t] = alt_coupon_return
+            results_path['alt_bonds_duration_effect'][t] = alt_duration_effect
+            results_path['alt_bonds_default_loss'][t] = alt_default_loss
+            results_path['alt_bonds_market_value'][t] = alt_bond_market_value
+            results_path['alt_bonds_fixed_coupon'][t] = alt_bond_fixed_coupon
+
+        # Rendite der Non-Bond Asset-Klassen (Equities, RealEstate)
         r_Equities_t = simulated_returns_t[idx_equities]
         r_RealEstate_t = simulated_returns_t[idx_realestate]
-        r_Alternatives_t = simulated_returns_t[idx_alternatives]
         
         # === MEAN REVERSION FÜR AKTIEN ===
         # Wenn aktiviert, wird bei stark negativer kumulierter Performance
@@ -1342,8 +1428,9 @@ def run_monte_carlo_path_full(args):
                                                qx_arrays, cached_annuity_factors, cached_survival_probs)
         
         # Prüfe ob liability_matching Modus aktiv ist (für Gov oder Corp Bonds)
-        needs_yearly_liability_duration = (gov_duration_mode == "liability_matching" or 
-                                            corp_duration_mode == "liability_matching")
+        needs_yearly_liability_duration = (gov_duration_mode == "liability_matching" or
+                                            corp_duration_mode == "liability_matching" or
+                                            alt_duration_mode == "liability_matching")
         
         # Berechne Liability-Duration:
         # - Jedes Jahr wenn liability_matching Modus aktiv ist (für präzises Matching)
@@ -1436,7 +1523,7 @@ def run_monte_carlo_path_full(args):
             population_state = pd.concat([population_state, new_cohort], ignore_index=True)
 
             # 8. Aktualisiere CFM-Tranchen wenn Cash Flow Matching aktiv ist
-            if gov_duration_mode == "cashflow_matching" or corp_duration_mode == "cashflow_matching":
+            if gov_duration_mode == "cashflow_matching" or corp_duration_mode == "cashflow_matching" or alt_duration_mode == "cashflow_matching":
                 # Berechne erwartete Cashflows für den neuen erweiterten Bestand
                 updated_expected_cfs = calculate_expected_cashflows(
                     population_state, survival_table, qx_arrays, T_horizon - t,
@@ -1472,6 +1559,19 @@ def run_monte_carlo_path_full(args):
                     else:
                         corp_cfm_tranches = corp_cfm_new
 
+                # Infrastructure Debt (Alternatives) CFM Tranchen aktualisieren
+                if alt_duration_mode == "cashflow_matching":
+                    new_alt_bond_value = new_V * cfg.WEIGHTS[5]
+                    alt_cfm_new = calculate_cfm_tranches(updated_expected_cfs, new_alt_bond_value)
+                    if alt_cfm_tranches is not None:
+                        for i in range(min(len(alt_cfm_tranches['values']), len(alt_cfm_new['values']))):
+                            alt_cfm_tranches['values'][i] += alt_cfm_new['values'][i]
+                        total_value = np.sum(alt_cfm_tranches['values'])
+                        if total_value > 0:
+                            alt_cfm_tranches['weights'] = alt_cfm_tranches['values'] / total_value
+                    else:
+                        alt_cfm_tranches = alt_cfm_new
+
             # 9. Aktualisiere gespeicherte Werte
             results_path['W_t'][t] = W_t
             results_path['V_t'][t] = V_t
@@ -1496,6 +1596,7 @@ def run_monte_carlo_path_full(args):
         # Speichere alte Durations für Reset-Erkennung
         old_gov_duration = current_gov_bond_duration
         old_corp_duration = current_corp_bond_duration
+        old_alt_duration = current_alt_bond_duration
         
         # Duration-Management für Government Bonds (mit Duration-Mode)
         current_gov_bond_duration, gov_was_reset = get_duration_for_mode(
@@ -1520,7 +1621,19 @@ def run_monte_carlo_path_full(args):
             is_liability_recalc_year=is_liability_recalc_year,
             cfm_tranches=corp_cfm_tranches
         )
-        
+
+        # Duration-Management für Infrastructure Debt (Alternatives) (mit Duration-Mode)
+        current_alt_bond_duration, alt_was_reset = get_duration_for_mode(
+            mode=alt_duration_mode,
+            current_duration=current_alt_bond_duration,
+            initial_duration=getattr(cfg, 'INITIAL_ALT_BOND_DURATION', 30.0),
+            liability_duration=current_liability_duration,
+            reset_interval=alt_reset_interval,
+            year=t,
+            is_liability_recalc_year=is_liability_recalc_year,
+            cfm_tranches=alt_cfm_tranches
+        )
+
         # === RESET BOND STATE BEI NEUANLAGE ===
         # Bei Duration-Reset werden Bonds verkauft und neue gekauft
         # -> Neuer Coupon zum aktuellen Zinsniveau, Marktwert zurück auf Par
@@ -1570,10 +1683,30 @@ def run_monte_carlo_path_full(args):
                 corp_bond_fixed_coupon = (1 - rebalance_fraction) * corp_bond_fixed_coupon + rebalance_fraction * new_coupon
                 corp_bond_market_value = (1 - rebalance_fraction) * corp_bond_market_value + rebalance_fraction * 1.0
                 corp_bond_initial_duration = current_corp_bond_duration
-        
+
+        # Infrastructure Debt (Alternatives) Reset
+        if alt_duration_mode == "cashflow_matching":
+            if alt_cfm_tranches is not None:
+                alt_bond_fixed_coupon = get_cfm_coupon_rate(alt_cfm_tranches, t + 1, r1_t,
+                                                         cfg.YIELD_CURVE_SLOPE, alt_credit_spread)
+            alt_bond_initial_duration = current_alt_bond_duration
+        elif alt_was_reset and alt_duration_mode != "liability_matching":
+            alt_bond_fixed_coupon = r1_t + current_alt_bond_duration * cfg.YIELD_CURVE_SLOPE + alt_credit_spread
+            alt_bond_market_value = 1.0
+            alt_bond_initial_duration = current_alt_bond_duration
+        elif alt_duration_mode == "liability_matching":
+            duration_change = abs(current_alt_bond_duration - old_alt_duration)
+            if duration_change > 1.0:
+                rebalance_fraction = min(duration_change / old_alt_duration, 1.0) if old_alt_duration > 0 else 1.0
+                new_coupon = r1_t + current_alt_bond_duration * cfg.YIELD_CURVE_SLOPE + alt_credit_spread
+                alt_bond_fixed_coupon = (1 - rebalance_fraction) * alt_bond_fixed_coupon + rebalance_fraction * new_coupon
+                alt_bond_market_value = (1 - rebalance_fraction) * alt_bond_market_value + rebalance_fraction * 1.0
+                alt_bond_initial_duration = current_alt_bond_duration
+
         # Speichere Bond-Durations für Analyse
         results_path['gov_bond_duration'][t] = current_gov_bond_duration
         results_path['corp_bond_duration'][t] = current_corp_bond_duration
+        results_path['alt_bond_duration'][t] = current_alt_bond_duration
         
         V_t_minus_1 = V_t
         
@@ -1616,12 +1749,20 @@ def analyze_results(full_results, T_horizon):
     corp_bonds_default_matrix = np.array([res['corp_bonds_default_loss'] for res in full_results])
     corp_bonds_mv_matrix = np.array([res['corp_bonds_market_value'] for res in full_results])
     corp_bonds_fixed_coupon_matrix = np.array([res['corp_bonds_fixed_coupon'] for res in full_results])
-    
+
+    # Infrastructure Debt (Alternatives) Bond-Komponenten
+    alt_bonds_coupon_matrix = np.array([res['alt_bonds_coupon'] for res in full_results])
+    alt_bonds_dur_matrix = np.array([res['alt_bonds_duration_effect'] for res in full_results])
+    alt_bonds_default_matrix = np.array([res['alt_bonds_default_loss'] for res in full_results])
+    alt_bonds_mv_matrix = np.array([res['alt_bonds_market_value'] for res in full_results])
+    alt_bonds_fixed_coupon_matrix = np.array([res['alt_bonds_fixed_coupon'] for res in full_results])
+
     # Zinsen
     r1_matrix = np.array([res['r1_t'] for res in full_results])
     i_gov_matrix = np.array([res['i_gov_bonds_t'] for res in full_results])
     i_corp_matrix = np.array([res['i_corp_bonds_t'] for res in full_results])
     i_tech_matrix = np.array([res['i_tech_t'] for res in full_results])
+    i_alt_matrix = np.array([res['i_alt_bonds_t'] for res in full_results])
     
     # Vermögen und Verpflichtungen
     V_matrix = np.array([res['V_t'] for res in full_results])
@@ -1631,6 +1772,7 @@ def analyze_results(full_results, T_horizon):
     # Bond-Durations (neu für Liability Matching Tracking)
     gov_bond_dur_matrix = np.array([res['gov_bond_duration'] for res in full_results])
     corp_bond_dur_matrix = np.array([res['corp_bond_duration'] for res in full_results])
+    alt_bond_dur_matrix = np.array([res['alt_bond_duration'] for res in full_results])
     
     # Demographie
     num_pensioners_matrix = np.array([res['num_pensioners'] for res in full_results])
@@ -1661,9 +1803,15 @@ def analyze_results(full_results, T_horizon):
         'Mean_Equities_Return': np.mean(equities_matrix, axis=0),
         'Mean_RealEstate_Return': np.mean(realestate_matrix, axis=0),
         'Mean_Alternatives_Return': np.mean(alternatives_matrix, axis=0),
+        'Mean_AltBonds_Coupon': np.mean(alt_bonds_coupon_matrix, axis=0),
+        'Mean_AltBonds_Duration_Effect': np.mean(alt_bonds_dur_matrix, axis=0),
+        'Mean_AltBonds_Default_Loss': np.mean(alt_bonds_default_matrix, axis=0),
+        'Mean_AltBonds_MarketValue': np.mean(alt_bonds_mv_matrix, axis=0),
+        'Mean_AltBonds_FixedCoupon': np.mean(alt_bonds_fixed_coupon_matrix, axis=0),
         'Mean_r1_t': np.mean(r1_matrix, axis=0),
         'Mean_i_GovBonds_t': np.mean(i_gov_matrix, axis=0),
         'Mean_i_CorpBonds_t': np.mean(i_corp_matrix, axis=0),
+        'Mean_i_AltBonds_t': np.mean(i_alt_matrix, axis=0),
         'Mean_i_Tech_t': np.mean(i_tech_matrix, axis=0),
         'Mean_Cashflow_Rent': np.mean(cf_matrix, axis=0),
         'Mean_Admin_Fee': np.mean(cf_admin_matrix, axis=0),
@@ -1673,6 +1821,7 @@ def analyze_results(full_results, T_horizon):
         'Mean_Liability_Duration': np.mean(liab_dur_matrix, axis=0),
         'Mean_GovBond_Duration': np.mean(gov_bond_dur_matrix, axis=0),    # NEU
         'Mean_CorpBond_Duration': np.mean(corp_bond_dur_matrix, axis=0),  # NEU
+        'Mean_AltBond_Duration': np.mean(alt_bond_dur_matrix, axis=0),   # NEU
         'Mean_Num_Pensioners': np.mean(num_pensioners_matrix, axis=0),
         'Mean_Num_Widows': np.mean(num_widows_matrix, axis=0),
     })
@@ -1916,7 +2065,16 @@ def export_all_paths_csv(full_results, T_horizon, output_dir='data', population_
         'corp_bond_default_probability': getattr(cfg, 'CORP_BOND_DEFAULT_PROBABILITY', 0.003),
         'corp_bond_loss_given_default': getattr(cfg, 'CORP_BOND_LOSS_GIVEN_DEFAULT', 0.40),
         'corp_bond_default_exposure': getattr(cfg, 'CORP_BOND_DEFAULT_EXPOSURE', 0.02),
-        
+
+        # Infrastructure Debt (Alternatives)
+        'initial_alt_bond_duration': getattr(cfg, 'INITIAL_ALT_BOND_DURATION', 30.0),
+        'alt_bond_duration_mode': getattr(cfg, 'ALT_BOND_DURATION_MODE', 'fixed'),
+        'alt_bond_duration_reset_interval': getattr(cfg, 'ALT_BOND_DURATION_RESET_INTERVAL', 5),
+        'alt_bond_credit_spread': getattr(cfg, 'ALT_BOND_CREDIT_SPREAD', 0.015),
+        'alt_bond_default_probability': getattr(cfg, 'ALT_BOND_DEFAULT_PROBABILITY', 0.013),
+        'alt_bond_loss_given_default': getattr(cfg, 'ALT_BOND_LOSS_GIVEN_DEFAULT', 0.35),
+        'alt_bond_default_exposure': getattr(cfg, 'ALT_BOND_DEFAULT_EXPOSURE', 0.02),
+
         # Finanzierung
         'general_reserve_rate': cfg.GENERAL_RESERVE_RATE,
         'admin_fee_per_person': getattr(cfg, 'ADMIN_FEE_PER_PERSON', 0),
@@ -1980,11 +2138,15 @@ def export_all_paths_csv(full_results, T_horizon, output_dir='data', population_
                 'corp_bonds_coupon': res['corp_bonds_coupon'][t],
                 'corp_bonds_duration_effect': res['corp_bonds_duration_effect'][t],
                 'corp_bonds_default_loss': res['corp_bonds_default_loss'][t],
-                
+                'alt_bonds_coupon': res['alt_bonds_coupon'][t],
+                'alt_bonds_duration_effect': res['alt_bonds_duration_effect'][t],
+                'alt_bonds_default_loss': res['alt_bonds_default_loss'][t],
+
                 # Zinsen
                 'r1_t': res['r1_t'][t],
                 'i_gov_bonds_t': res['i_gov_bonds_t'][t],
                 'i_corp_bonds_t': res['i_corp_bonds_t'][t],
+                'i_alt_bonds_t': res['i_alt_bonds_t'][t],
                 'i_tech_t': res['i_tech_t'][t],
                 
                 # Cashflows

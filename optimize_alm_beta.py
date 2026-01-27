@@ -152,7 +152,7 @@ def validate_weights(w_gov, w_corp, w_eq, w_re):
     if total > 1.0:
         return None, False
     w_alt = 1.0 - total
-    if w_alt < 0 or w_alt > 0.30:  # Alternatives max 30%
+    if w_alt < 0 or w_alt > 0.25:  # Alternatives max 25% (Art. 53 BVV2 Abs.1 lit. d_bis/d_ter)
         return None, False
     return w_alt, True
 
@@ -883,7 +883,7 @@ def main():
     print(f"    Corporate Bonds: {best_params['w_corp_bonds']*100:5.1f}%")
     print(f"    Aktien:          {best_params['w_equities']*100:5.1f}%")
     print(f"    Immobilien:      {best_params['w_realestate']*100:5.1f}%")
-    print(f"    Alternatives:    {best_params['w_alternatives']*100:5.1f}%")
+    print(f"    Infra Debt:      {best_params['w_alternatives']*100:5.1f}%")
     print(f"  {'─'*50}")
     print(f"  Bond-Durationen:")
     print(f"    Staatsanleihen:  {best_params['gov_bond_duration']:5.1f} Jahre")

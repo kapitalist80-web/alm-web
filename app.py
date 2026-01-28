@@ -408,6 +408,11 @@ async def index(request: Request):
     })
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.get("/api/config")
 async def get_config():
     """Get current configuration."""

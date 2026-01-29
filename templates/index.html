@@ -394,27 +394,10 @@
             </div>
             <div class="sidebar">
                 <div class="card">
-                    <div class="card-head"><span>Modus</span></div>
+                    <div class="card-head"><span>Simulation</span></div>
                     <div class="card-body">
-                        <div class="mode-toggle">
-                            <button class="mode-btn active" data-mode="simulation"><div class="icon">📊</div><div>Simulation</div></button>
-                            <button class="mode-btn" data-mode="optimization"><div class="icon">🎯</div><div>Optimierung</div></button>
-                        </div>
-                        <div class="panel active" id="panel-simulation">
-                            <p style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem">Monte-Carlo-Simulation mit Chart-Ausgabe</p>
-                            <button class="btn btn-primary" id="startSimBtn" style="width:100%">▶ Simulation starten</button>
-                        </div>
-                        <div class="panel" id="panel-optimization">
-                            <div class="section" style="margin-bottom:.75rem"><div class="section-title">Methode</div>
-                                <div class="opt-method">
-                                    <button class="method-btn active" data-method="bayesian"><div class="name">Bayesian</div></button>
-                                    <button class="method-btn" data-method="random"><div class="name">Random</div></button>
-                                    <button class="method-btn" data-method="grid"><div class="name">Grid</div></button>
-                                </div>
-                            </div>
-                            <div class="form-group" style="margin-bottom:.5rem"><label>Iterationen</label><input type="number" id="iterations" value="50"></div>
-                            <div class="actions"><button class="btn btn-primary" id="startOptBtn">▶ Start</button><button class="btn btn-danger" id="stopBtn" disabled>■ Stop</button></div>
-                        </div>
+                        <p style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem">Monte-Carlo-Simulation mit Chart-Ausgabe</p>
+                        <button class="btn btn-primary" id="startSimBtn" style="width:100%">▶ Simulation starten</button>
                         <div class="progress" id="progressBar" style="display:none"><div class="progress-bar"></div></div>
                     </div>
                 </div>
@@ -604,7 +587,7 @@ function handleMsg(d){
 
 function log(m,t=''){const l=document.createElement('div');l.className='console-line '+t;l.textContent=m;consoleEl.appendChild(l);consoleEl.scrollTop=consoleEl.scrollHeight}
 
-function updateStatus(r,m){isRunning=r;statusDot.className='dot'+(r?' running':'');statusText.textContent=m||(r?'Läuft...':'Bereit');document.getElementById('startSimBtn').disabled=r;document.getElementById('startOptBtn').disabled=r;document.getElementById('stopBtn').disabled=!r;progressBar.style.display=r?'block':'none'}
+function updateStatus(r,m){isRunning=r;statusDot.className='dot'+(r?' running':'');statusText.textContent=m||(r?'Läuft...':'Bereit');document.getElementById('startSimBtn').disabled=r;progressBar.style.display=r?'block':'none'}
 
 function collectConfig(){const c={};document.querySelectorAll('input[id]').forEach(i=>{if(i.type==='checkbox')c[i.id]=i.checked;else if(i.type==='number'){const v=i.value.trim();c[i.id]=v===''?null:parseFloat(v)}else c[i.id]=i.value});document.querySelectorAll('select[id]').forEach(s=>{c[s.id]=s.value});return c}
 
@@ -1091,13 +1074,9 @@ function renderFullscreenChart(chartId) {
 
 // Event Listeners
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active')}));
-document.querySelectorAll('.mode-btn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedMode=b.dataset.mode;document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));document.getElementById('panel-'+selectedMode).classList.add('active')}));
-document.querySelectorAll('.method-btn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.method-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedMethod=b.dataset.method}));
 document.querySelectorAll('.main-tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.main-tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.main-view').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('view-'+t.dataset.view).classList.add('active');if(t.dataset.view==='analysis')refreshAnalysisFiles()}));
 
 document.getElementById('startSimBtn').addEventListener('click',startSim);
-document.getElementById('startOptBtn').addEventListener('click',startOpt);
-document.getElementById('stopBtn').addEventListener('click',stopProc);
 document.getElementById('clearConsole').addEventListener('click',()=>{consoleEl.innerHTML='<div class="console-line info">Gelöscht.</div>'});
 document.getElementById('refreshFiles').addEventListener('click',refreshFiles);
 document.getElementById('hideChart').addEventListener('click',()=>{chartCard.style.display='none'});

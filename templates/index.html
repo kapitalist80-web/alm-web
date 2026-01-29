@@ -144,12 +144,67 @@
         .legend-inline{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;font-size:.65rem}
         .legend-item{display:flex;align-items:center;gap:.3rem}
         .legend-dot{width:10px;height:10px;border-radius:2px}
+        .subtitle{font-size:.7rem;color:var(--muted);line-height:1.4;max-width:480px}
+        .subtitle .author{color:var(--cyan);font-weight:500}
+        .disclaimer{font-size:.6rem;color:var(--muted);opacity:.7;line-height:1.3;margin-top:.3rem}
+        @media(max-width:768px){
+            .container{padding:.75rem}
+            header{flex-direction:column;align-items:flex-start;gap:.75rem}
+            .logo h1{font-size:1.1rem}
+            .subtitle{max-width:100%}
+            .status{align-self:flex-start}
+            .main-tabs{flex-direction:column;gap:.4rem}
+            .main-tab{padding:.6rem 1rem;font-size:.8rem;text-align:center}
+            .grid{grid-template-columns:1fr!important;gap:1rem}
+            .sidebar{order:-1}
+            .form-grid{grid-template-columns:1fr 1fr!important;gap:.5rem}
+            .tabs{flex-wrap:wrap}
+            .tab{padding:.5rem .3rem;font-size:.7rem}
+            .stats{grid-template-columns:1fr 1fr;gap:.4rem}
+            .stat-val{font-size:.9rem}
+            .chart-box{height:240px}
+            .mode-toggle{flex-direction:column;gap:.4rem}
+            .opt-method{flex-wrap:wrap}
+            .method-btn{min-width:calc(50% - .2rem)}
+            .console{height:120px;font-size:.65rem}
+            .corr-row{grid-template-columns:50px repeat(6,1fr);gap:.2rem}
+            .corr-cell input{font-size:.6rem;padding:.2rem}
+            .corr-lbl{font-size:.6rem}
+            .corr-cell.hdr{font-size:.6rem}
+            .card-body{padding:.75rem}
+            .card-head{padding:.75rem}
+            .section-title{font-size:.65rem}
+            .form-group label{font-size:.65rem}
+            .form-group input,.form-group select{padding:.4rem .5rem;font-size:.75rem}
+            .actions{flex-direction:column;gap:.4rem}
+            .actions .btn{width:100%}
+            .path-charts{grid-template-columns:1fr!important}
+            .path-chart-box{height:220px}
+            .boxplot-container{height:300px}
+            div[style*="grid-template-columns:1fr 320px"]{grid-template-columns:1fr!important}
+            .params-box{margin-top:.5rem}
+            .params-grid{grid-template-columns:1fr!important}
+            .analysis-header{flex-direction:column}
+            .year-slider{width:100%}
+            .year-slider input[type=range]{flex:1}
+            .chart-modal{padding:.5rem}
+            .chart-modal-header{flex-direction:column;gap:.5rem;align-items:flex-start}
+            .scroll{max-height:none;overflow-y:visible}
+            .upload{padding:.8rem}
+            .upload .icon{font-size:1.2rem}
+        }
+        @media(max-width:400px){
+            .form-grid{grid-template-columns:1fr!important}
+            .stats{grid-template-columns:1fr}
+            .corr-row{grid-template-columns:40px repeat(6,1fr);gap:.15rem}
+            .corr-cell input{font-size:.55rem}
+        }
     </style>
 </head>
 <body>
 <div class="container">
     <header>
-        <div class="logo"><div class="logo-icon">Σ</div><div><h1>ALM Optimizer</h1></div></div>
+        <div class="logo"><div class="logo-icon">Σ</div><div><h1>Asset-Liability-Management Simulationstool</h1><div class="subtitle"><span class="author">Entwickelt von Michel Bossong</span> im Rahmen der Diplomarbeit zum Experten in beruflicher Vorsorge<div class="disclaimer">Haftungsausschluss: Dieses Tool dient ausschliesslich zu Demonstrations- und Analysezwecken. Die Simulationsergebnisse basieren auf vereinfachten Modellannahmen und ersetzen keine professionelle Beratung. Die Nutzung erfolgt kostenlos und auf eigene Verantwortung. Der Autor übernimmt keine Haftung für die Genauigkeit der Resultate oder für Entscheidungen, die auf deren Grundlage getroffen werden.</div></div></div></div>
         <div class="status"><div class="dot" id="statusDot"></div><span id="statusText">Bereit</span></div>
     </header>
     <div class="main-tabs">
@@ -1124,14 +1179,23 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Bond Duration Mode change handlers
-function updateResetIntervalState(modeId, intervalId) {
+function updateBondDurationState(modeId, intervalId, durationId) {
     const mode = document.getElementById(modeId);
     const interval = document.getElementById(intervalId);
-    interval.disabled = mode.value !== 'fixed_reset';
+    const duration = document.getElementById(durationId);
+    const modeVal = mode.value;
+    interval.disabled = modeVal !== 'fixed_reset';
+    const durationEditable = (modeVal === 'fixed' || modeVal === 'fixed_reset');
+    duration.disabled = !durationEditable;
+    duration.readOnly = !durationEditable;
 }
-document.getElementById('GOV_BOND_DURATION_MODE').addEventListener('change', () => updateResetIntervalState('GOV_BOND_DURATION_MODE', 'GOV_BOND_DURATION_RESET_INTERVAL'));
-document.getElementById('CORP_BOND_DURATION_MODE').addEventListener('change', () => updateResetIntervalState('CORP_BOND_DURATION_MODE', 'CORP_BOND_DURATION_RESET_INTERVAL'));
-document.getElementById('ALT_BOND_DURATION_MODE').addEventListener('change', () => updateResetIntervalState('ALT_BOND_DURATION_MODE', 'ALT_BOND_DURATION_RESET_INTERVAL'));
+document.getElementById('GOV_BOND_DURATION_MODE').addEventListener('change', () => updateBondDurationState('GOV_BOND_DURATION_MODE', 'GOV_BOND_DURATION_RESET_INTERVAL', 'INITIAL_GOV_BOND_DURATION'));
+document.getElementById('CORP_BOND_DURATION_MODE').addEventListener('change', () => updateBondDurationState('CORP_BOND_DURATION_MODE', 'CORP_BOND_DURATION_RESET_INTERVAL', 'INITIAL_CORP_BOND_DURATION'));
+document.getElementById('ALT_BOND_DURATION_MODE').addEventListener('change', () => updateBondDurationState('ALT_BOND_DURATION_MODE', 'ALT_BOND_DURATION_RESET_INTERVAL', 'INITIAL_ALT_BOND_DURATION'));
+// Initialize duration field states on load
+updateBondDurationState('GOV_BOND_DURATION_MODE', 'GOV_BOND_DURATION_RESET_INTERVAL', 'INITIAL_GOV_BOND_DURATION');
+updateBondDurationState('CORP_BOND_DURATION_MODE', 'CORP_BOND_DURATION_RESET_INTERVAL', 'INITIAL_CORP_BOND_DURATION');
+updateBondDurationState('ALT_BOND_DURATION_MODE', 'ALT_BOND_DURATION_RESET_INTERVAL', 'INITIAL_ALT_BOND_DURATION');
 
 // Initialize
 connectWS();

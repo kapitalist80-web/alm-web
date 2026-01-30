@@ -441,6 +441,9 @@
                                 <div class="form-group"><label>σ Rente</label><input type="number" id="gen_pension_std" value="10000" step="1000"></div>
                                 <div class="form-group"><label>Min Rente</label><input type="number" id="gen_pension_min" value="10000" step="1000"></div>
                                 <div class="form-group"><label>Max Rente</label><input type="number" id="gen_pension_max" value="80000" step="1000"></div>
+                                <div class="form-group"><label>Ø Altersdiff.</label><input type="number" id="gen_spouse_age_diff_mean" value="-3" step="1" min="-15" max="15" title="Altersdifferenz Ehegatte (negativ = jünger)"></div>
+                                <div class="form-group"><label>σ Altersdiff.</label><input type="number" id="gen_spouse_age_diff_std" value="2" step="0.5" min="0" max="10" title="Standardabweichung Altersdifferenz"></div>
+                                <div class="form-group"><label>Ehegattenrente</label><input type="number" id="gen_spouse_pension_rate" value="0.40" step="0.05" min="0" max="1" title="Anteil Ehegattenrente (z.B. 0.40 = 40%)"></div>
                             </div>
                             <button class="btn btn-primary" id="generatePopBtn" style="width:100%;margin-top:.75rem">🎲 Generieren</button>
                         </div>
@@ -1127,6 +1130,9 @@ document.getElementById('generatePopBtn').addEventListener('click',async()=>{
     fd.append('pension_std',document.getElementById('gen_pension_std').value);
     fd.append('pension_min',document.getElementById('gen_pension_min').value);
     fd.append('pension_max',document.getElementById('gen_pension_max').value);
+    fd.append('spouse_age_diff_mean',document.getElementById('gen_spouse_age_diff_mean').value);
+    fd.append('spouse_age_diff_std',document.getElementById('gen_spouse_age_diff_std').value);
+    fd.append('spouse_pension_rate',document.getElementById('gen_spouse_pension_rate').value);
     try{
         log('Generiere Rentnerbestand...','info');
         const r=await fetch('/api/generate-population',{method:'POST',body:fd});

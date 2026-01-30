@@ -497,6 +497,9 @@ async def generate_population(
     pension_std: float = Form(10000),
     pension_min: float = Form(10000),
     pension_max: float = Form(80000),
+    spouse_age_diff_mean: float = Form(-3),
+    spouse_age_diff_std: float = Form(2),
+    spouse_pension_rate: float = Form(0.40),
 ):
     """Generate a new population file with given parameters."""
     import numpy as np
@@ -546,7 +549,14 @@ async def generate_population(
         
         # Birth years
         birth_years = CURRENT_YEAR - ages
-        
+
+        # Spouse age difference (normal distribution, sign flipped for females)
+        spouse_age_diffs = np.round(np.where(
+            genders == 'M',
+            np.random.normal(spouse_age_diff_mean, spouse_age_diff_std, n_population),
+            np.random.normal(-spouse_age_diff_mean, spouse_age_diff_std, n_population)
+        )).astype(int)
+
         # Create DataFrame
         population_df = pd.DataFrame({
             'ID': np.arange(1, n_population + 1),
@@ -555,6 +565,8 @@ async def generate_population(
             'MaritalStatus': marital_statuses,
             'InitialPension': pensions,
             'BirthYear': birth_years,
+            'SpouseAgeDiff': spouse_age_diffs,
+            'SpousePensionRate': spouse_pension_rate,
         })
         
         # Save

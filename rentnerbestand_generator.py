@@ -33,6 +33,22 @@ pension_mean = 30000
 pension_std = 10000
 pensions = np.round(np.clip(np.random.normal(pension_mean, pension_std, N_POPULATION), 10000, 80000), -2)
 
+# 5. Ehegatten-Altersdifferenz (SpouseAgeDiff)
+# Normalverteilung: Mittelwert und Standardabweichung konfigurierbar
+# Konvention: negativ = Partner jünger, positiv = Partner älter
+spouse_age_diff_mean = -3  # Mittelwert: Partner 3 Jahre jünger
+spouse_age_diff_std = 2     # Standardabweichung
+# Für Männer: Partner typisch jünger (negativer Wert), für Frauen: Partner typisch älter (positiver Wert)
+spouse_age_diffs = np.round(np.where(
+    genders == 'M',
+    np.random.normal(spouse_age_diff_mean, spouse_age_diff_std, N_POPULATION),
+    np.random.normal(-spouse_age_diff_mean, spouse_age_diff_std, N_POPULATION)
+)).astype(int)
+
+# 6. Ehegattenrente (SpousePensionRate)
+# Anteil der Rente, den der überlebende Ehegatte erhält
+spouse_pension_rate = 0.40  # 40%
+
 # Berechnung des Geburtsjahres
 birth_years = CURRENT_YEAR - ages
 
@@ -44,6 +60,8 @@ population_df = pd.DataFrame({
     'MaritalStatus': marital_statuses,
     'InitialPension': pensions,
     'BirthYear': birth_years,
+    'SpouseAgeDiff': spouse_age_diffs,
+    'SpousePensionRate': spouse_pension_rate,
 })
 
 # Adjustment für Witwen/Witwer: Ihre Rente ist bereits die Hinterbliebenenrente (40%)

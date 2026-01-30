@@ -279,6 +279,7 @@
                                     <div class="form-group"><label>Equities</label><input type="number" id="WEIGHT_Equities" value="0.05" step="0.01"></div>
                                     <div class="form-group"><label>Real Estate</label><input type="number" id="WEIGHT_RealEstate" value="0.07" step="0.01"></div>
                                     <div class="form-group"><label>Infra Debt</label><input type="number" id="WEIGHT_Alternatives" value="0.00" step="0.01" max="0.25" title="Max. 25% (Art. 53 BVV2 Abs.1 lit. d_bis/d_ter)"></div>
+                                    <div class="form-group"><label>Σ Gewichte</label><span id="weightSum" style="font-weight:600;font-size:.85rem;padding:.25rem 0">1.00</span></div>
                                 </div>
                             </div>
                             <div class="section"><div class="section-title">Zinsstruktur</div>
@@ -378,15 +379,28 @@
                         </div>
                         <div class="tab-content" id="tab-corr">
                             <div class="section"><div class="section-title">Korrelationsmatrix</div>
+                                <p style="font-size:.65rem;color:var(--muted);margin-bottom:.5rem">
+                                    Gov Bonds, Corp Bonds und Infra Debt Korrelationen werden aus dem Basiszins abgeleitet und sind daher nicht editierbar.
+                                </p>
                                 <div class="corr">
-                                    <div class="corr-row"><div class="corr-lbl"></div><div class="corr-cell hdr">IntRate</div><div class="corr-cell hdr">Gov</div><div class="corr-cell hdr">Corp</div><div class="corr-cell hdr">Eq</div><div class="corr-cell hdr">RE</div><div class="corr-cell hdr">Infra</div></div>
-                                    <div class="corr-row"><div class="corr-lbl">IntRate</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_IntRate_GovBonds" value="0.90" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_CorpBonds" value="0.80" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_Equities" value="0.20" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_RealEstate" value="0.40" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_Alternatives" value="0.30" step="0.05"></div></div>
-                                    <div class="corr-row"><div class="corr-lbl">GovBonds</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_GovBonds_CorpBonds" value="0.85" step="0.05"></div><div class="corr-cell"><input id="CORR_GovBonds_Equities" value="0.30" step="0.05"></div><div class="corr-cell"><input id="CORR_GovBonds_RealEstate" value="0.20" step="0.05"></div><div class="corr-cell"><input id="CORR_GovBonds_Alternatives" value="0.40" step="0.05"></div></div>
-                                    <div class="corr-row"><div class="corr-lbl">CorpBonds</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_CorpBonds_Equities" value="0.45" step="0.05"></div><div class="corr-cell"><input id="CORR_CorpBonds_RealEstate" value="0.30" step="0.05"></div><div class="corr-cell"><input id="CORR_CorpBonds_Alternatives" value="0.50" step="0.05"></div></div>
-                                    <div class="corr-row"><div class="corr-lbl">Equities</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_Equities_RealEstate" value="0.50" step="0.05"></div><div class="corr-cell"><input id="CORR_Equities_Alternatives" value="0.60" step="0.05"></div></div>
-                                    <div class="corr-row"><div class="corr-lbl">RealEstate</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_RealEstate_Alternatives" value="0.30" step="0.05"></div></div>
-                                    <div class="corr-row"><div class="corr-lbl">Infra Debt</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div></div>
+                                    <div class="corr-row"><div class="corr-lbl"></div><div class="corr-cell hdr">IntRate</div><div class="corr-cell hdr">Eq</div><div class="corr-cell hdr">RE</div></div>
+                                    <div class="corr-row"><div class="corr-lbl">IntRate</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_IntRate_Equities" value="0.20" step="0.05"></div><div class="corr-cell"><input id="CORR_IntRate_RealEstate" value="0.40" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">Equities</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div><div class="corr-cell"><input id="CORR_Equities_RealEstate" value="0.50" step="0.05"></div></div>
+                                    <div class="corr-row"><div class="corr-lbl">RealEstate</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell" style="opacity:.3">-</div><div class="corr-cell diag">1.00</div></div>
                                 </div>
+                                <!-- Hidden: correlations derived from base rate -->
+                                <input type="hidden" id="CORR_IntRate_GovBonds" value="0.90">
+                                <input type="hidden" id="CORR_IntRate_CorpBonds" value="0.80">
+                                <input type="hidden" id="CORR_IntRate_Alternatives" value="0.30">
+                                <input type="hidden" id="CORR_GovBonds_CorpBonds" value="0.85">
+                                <input type="hidden" id="CORR_GovBonds_Equities" value="0.30">
+                                <input type="hidden" id="CORR_GovBonds_RealEstate" value="0.20">
+                                <input type="hidden" id="CORR_GovBonds_Alternatives" value="0.40">
+                                <input type="hidden" id="CORR_CorpBonds_Equities" value="0.45">
+                                <input type="hidden" id="CORR_CorpBonds_RealEstate" value="0.30">
+                                <input type="hidden" id="CORR_CorpBonds_Alternatives" value="0.50">
+                                <input type="hidden" id="CORR_Equities_Alternatives" value="0.60">
+                                <input type="hidden" id="CORR_RealEstate_Alternatives" value="0.30">
                             </div>
                         </div>
                     </div>
@@ -589,7 +603,11 @@ function log(m,t=''){const l=document.createElement('div');l.className='console-
 
 function updateStatus(r,m){isRunning=r;statusDot.className='dot'+(r?' running':'');statusText.textContent=m||(r?'Läuft...':'Bereit');document.getElementById('startSimBtn').disabled=r;progressBar.style.display=r?'block':'none'}
 
-function collectConfig(){const c={};document.querySelectorAll('input[id]').forEach(i=>{if(i.type==='checkbox')c[i.id]=i.checked;else if(i.type==='number'){const v=i.value.trim();c[i.id]=v===''?null:parseFloat(v)}else c[i.id]=i.value});document.querySelectorAll('select[id]').forEach(s=>{c[s.id]=s.value});return c}
+function collectConfig(){const c={};document.querySelectorAll('input[id]').forEach(i=>{if(i.type==='checkbox')c[i.id]=i.checked;else if(i.type==='number'||i.type==='hidden'){const v=i.value.trim();c[i.id]=v===''?null:parseFloat(v)}else c[i.id]=i.value});document.querySelectorAll('select[id]').forEach(s=>{c[s.id]=s.value});return c}
+
+function updateWeightSum(){const ids=['WEIGHT_GovBonds','WEIGHT_CorpBonds','WEIGHT_Equities','WEIGHT_RealEstate','WEIGHT_Alternatives'];const s=ids.reduce((a,id)=>a+(parseFloat(document.getElementById(id).value)||0),0);const el=document.getElementById('weightSum');el.textContent=s.toFixed(2);el.style.color=Math.abs(s-1)<0.001?'#3fb950':'#f85149'}
+document.querySelectorAll('[id^="WEIGHT_"]').forEach(i=>i.addEventListener('input',updateWeightSum));
+updateWeightSum();
 
 function renderChart(data){
     chartCard.style.display='block';

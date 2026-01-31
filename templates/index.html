@@ -420,13 +420,13 @@
                     <div class="card-body" style="padding:0"><div class="console" id="console"><div class="console-line info">ALM Optimizer bereit.</div></div></div>
                 </div>
                 <div class="card">
-                    <div class="card-head"><span>Rentnerbestand</span><button class="btn btn-secondary" style="padding:.2rem .5rem;font-size:.65rem" id="togglePopGen">Generator</button></div>
+                    <div class="card-head"><span>Rentnerbestand</span><button class="btn btn-secondary" style="padding:.2rem .5rem;font-size:.65rem" id="togglePopGen">Upload</button></div>
                     <div class="card-body">
-                        <div id="uploadSection">
+                        <div id="uploadSection" style="display:none">
                             <div class="upload" id="uploadZone"><div class="icon">📁</div><p>CSV hochladen</p></div>
                             <input type="file" id="fileInput" accept=".csv" style="display:none">
                         </div>
-                        <div id="generatorSection" style="display:none">
+                        <div id="generatorSection">
                             <div class="form-grid" style="gap:.5rem">
                                 <div class="form-group"><label>Anzahl</label><input type="number" id="gen_n_population" value="50" min="10" max="1000"></div>
                                 <div class="form-group"><label>Ø Alter</label><input type="number" id="gen_age_mean" value="69" min="60" max="85"></div>

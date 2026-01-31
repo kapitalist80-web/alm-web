@@ -492,8 +492,8 @@
                                 </div>
                             </div>
                         </div>
-                        <p style="font-size:.7rem;color:var(--muted);text-align:center;margin-top:.5rem">
-                            Klicke auf einen Punkt, um den Pfad detailliert zu analysieren
+                        <p style="font-size:.75rem;color:var(--accent);text-align:center;margin-top:.5rem;opacity:.85">
+                            💡 Klicke auf einen Punkt im Chart, um den Pfad detailliert auszuwerten
                         </p>
                     </div>
                     <div class="path-analysis" id="pathAnalysisView">
@@ -644,7 +644,7 @@ function startSim(){if(!ws||ws.readyState!==1){log('WS nicht verbunden','error')
 function startOpt(){if(!ws||ws.readyState!==1){log('WS nicht verbunden','error');return}const it=parseInt(document.getElementById('iterations').value)||50;ws.send(JSON.stringify({action:'start_optimization',config:collectConfig(),method:selectedMethod,iterations:it}));log('Starte '+selectedMethod+' Optimierung...','info')}
 async function stopProc(){try{await fetch('/api/stop',{method:'POST'});log('Stoppe...','warning')}catch(e){log('Stop-Fehler','error')}}
 
-async function refreshFiles(){try{const r=await fetch('/api/files');const f=await r.json();if(f.length===0){document.getElementById('fileList').innerHTML='<div class="empty"><div class="icon">📂</div><p>Keine Dateien</p></div>';return}document.getElementById('fileList').innerHTML=f.slice(0,8).map(x=>'<div class="file"><div class="file-info"><div class="file-icon">📄</div><div><div class="file-name">'+x.name+'</div><div class="file-meta">'+(x.size/1024).toFixed(1)+' KB</div></div></div><button class="file-dl" onclick="location.href=\'/api/download/'+x.name+'\'">↓</button></div>').join('')}catch(e){log('Fehler Dateien','error')}}
+async function refreshFiles(){try{const r=await fetch('/api/files');const all=await r.json();const f=all.filter(x=>x.name.toLowerCase().endsWith('.csv'));if(f.length===0){document.getElementById('fileList').innerHTML='<div class="empty"><div class="icon">📂</div><p>Keine CSV-Dateien</p></div>';return}document.getElementById('fileList').innerHTML=f.slice(0,8).map(x=>'<div class="file"><div class="file-info"><div class="file-icon">📄</div><div><div class="file-name">'+x.name+'</div><div class="file-meta">'+(x.size/1024).toFixed(1)+' KB</div></div></div><button class="file-dl" onclick="location.href=\'/api/download/'+x.name+'\'">↓</button></div>').join('')}catch(e){log('Fehler Dateien','error')}}
 
 async function uploadFile(f){const fd=new FormData();fd.append('file',f);try{log('Upload '+f.name+'...','info');const r=await fetch('/api/upload-population',{method:'POST',body:fd});const d=await r.json();if(d.success){log('Upload OK','success');refreshFiles()}else log('Upload fehlgeschlagen','error')}catch(e){log('Upload-Fehler','error')}}
 async function refreshAnalysisFiles(){

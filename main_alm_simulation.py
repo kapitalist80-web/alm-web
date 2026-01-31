@@ -138,6 +138,20 @@ def compute_initial_population_stats(initial_population_df, W0):
     # Anteil Ledige (Komplement zu verheiratet)
     share_single = 1.0 - share_married
 
+    # Ehegatten-Parameter
+    if 'SpouseAgeDiff' in pop.columns and n_total > 0:
+        sad = pop['SpouseAgeDiff'].astype(float)
+        spouse_age_diff_mean = float(sad.mean())
+        spouse_age_diff_std = float(sad.std())
+    else:
+        spouse_age_diff_mean = 0.0
+        spouse_age_diff_std = 0.0
+
+    if 'SpousePensionRate' in pop.columns and n_total > 0:
+        spouse_pension_rate_mean = float(pop['SpousePensionRate'].astype(float).mean())
+    else:
+        spouse_pension_rate_mean = 0.0
+
     return {
         'n_total': n_total,
         'avg_age': avg_age,
@@ -150,7 +164,10 @@ def compute_initial_population_stats(initial_population_df, W0):
         'share_single': share_single,
         'total_initial_pension': total_pension,
         **pension_stats,
-        'W0': float(W0)
+        'W0': float(W0),
+        'spouse_age_diff_mean': spouse_age_diff_mean,
+        'spouse_age_diff_std': spouse_age_diff_std,
+        'spouse_pension_rate': spouse_pension_rate_mean,
     }
 
 def get_qx(age, gender, survival_table):

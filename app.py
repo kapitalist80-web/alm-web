@@ -444,6 +444,19 @@ async def list_files():
     return JSONResponse(sorted(files, key=lambda x: x["modified"], reverse=True))
 
 
+@app.get("/api/documentation")
+async def download_documentation():
+    """Download the technical documentation PDF."""
+    doc_path = BASE_DIR / "ALM_Technische_Dokumentation.pdf"
+    if doc_path.exists():
+        return FileResponse(
+            path=str(doc_path),
+            filename="ALM_Technische_Dokumentation.pdf",
+            media_type="application/pdf"
+        )
+    return JSONResponse({"error": "Documentation not found"}, status_code=404)
+
+
 @app.get("/api/download/{filename}")
 async def download_file(filename: str):
     """Download a file from data directory."""

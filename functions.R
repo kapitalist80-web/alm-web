@@ -1137,9 +1137,7 @@ analyze_return_volatility <- function(df,
 # sensitivity_analysis.py (Populations-Varianten x Allokationen x Duration x SS)
 # ============================================================================
 
-library(parallel)
-library(doParallel)
-library(foreach)
+library(parallel)    # Built-in, keine Installation nötig
 
 # ==============================================================================
 # 1. DATENIMPORT: Sensitivity-Szenario-CSVs (parallelisiert)

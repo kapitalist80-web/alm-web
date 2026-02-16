@@ -1131,8 +1131,839 @@ analyze_return_volatility <- function(df,
 # results$summary  # Tabelle mit beiden Volatilitäten (raw und adjusted)
 # results$plots$comparison  # Vergleichsplot
 # ============================================================================
+# SENSITIVITÄTSANALYSE: Laden und Auswerten der sensitivity_analysis.py Daten
+# ============================================================================
+# Für die systematische Auswertung der Szenario-Simulationen aus
+# sensitivity_analysis.py (Populations-Varianten x Allokationen x Duration x SS)
+# ============================================================================
+
+library(parallel)
+library(doParallel)
+library(foreach)
+
+# ==============================================================================
+# 1. DATENIMPORT: Sensitivity-Szenario-CSVs (parallelisiert)
+# ==============================================================================
+
+load_sensitivity_data <- function(data_dir = "data/sensitivity/",
+                                  pattern = "^sensitivity_scenario_.*\\.csv$",
+                                  n_cores = NULL,
+                                  verbose = TRUE) {
+  #' Lädt alle Szenario-CSVs aus dem Output von sensitivity_analysis.py
+  #'
+  #' @param data_dir   Pfad zum Verzeichnis mit den Szenario-CSVs
+
+  #' @param pattern    Regex-Pattern für die Dateinamen
+  #' @param n_cores    Anzahl CPU-Kerne (NULL = auto: alle - 1)
+  #' @param verbose    Fortschrittsanzeige
+  #' @return data.table mit allen Pfaden aller Szenarien
+
+  library(data.table)
+  library(parallel)
+
+  csv_files <- list.files(data_dir, pattern = pattern, full.names = TRUE)
+
+  if (length(csv_files) == 0) {
+    stop("Keine Sensitivity-CSVs gefunden in: ", data_dir,
+         "\n  Pattern: ", pattern)
+  }
+
+  if (is.null(n_cores)) n_cores <- max(1, detectCores() - 1)
+
+  if (verbose) {
+    cat(sprintf("=== SENSITIVITY DATA LOADER ===\n"))
+    cat(sprintf("Verzeichnis:   %s\n", data_dir))
+    cat(sprintf("Dateien:       %d\n", length(csv_files)))
+    cat(sprintf("Kerne:         %d\n", n_cores))
+  }
+
+  start_time <- Sys.time()
+
+  # Paralleles Laden
+  cl <- makeCluster(n_cores)
+  clusterEvalQ(cl, library(data.table))
+
+  df_list <- parLapply(cl, csv_files, function(file) {
+    dt <- fread(file, sep = ";", dec = ".", stringsAsFactors = FALSE,
+                showProgress = FALSE)
+    dt$source_file <- basename(file)
+    return(dt)
+  })
+
+  stopCluster(cl)
+
+  if (verbose) {
+    load_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    cat(sprintf("Laden:         %.1f Sek.\n", load_time))
+  }
+
+  # Kombinieren
+  dt <- rbindlist(df_list, fill = TRUE)
+  rm(df_list); gc(verbose = FALSE)
+
+  # Eindeutige path_nr innerhalb jedes Szenarios belassen (scenario_id + path_nr ist unique)
+  # Zusätzlich globale unique ID
+  dt[, global_path_id := paste(scenario_id, path_nr, sep = "_")]
+  dt[, global_path_nr := .GRP, by = global_path_id]
+  dt[, global_path_id := NULL]
+
+  # Numerische Spalten sicherstellen
+  num_cols <- c(
+    "scenario_id", "year", "path_nr",
+    "deckungsgrad", "V_t", "W_t", "portfolio_return",
+    "gov_bonds_return", "corp_bonds_return", "equities_return",
+    "realestate_return", "alternatives_return",
+    "gov_bonds_coupon", "gov_bonds_duration_effect",
+    "corp_bonds_coupon", "corp_bonds_duration_effect",
+    "corp_bonds_default_loss",
+    "alt_bonds_coupon", "alt_bonds_duration_effect", "alt_bonds_default_loss",
+    "r1_t", "i_gov_bonds_t", "i_corp_bonds_t", "i_alt_bonds_t", "i_tech_t",
+    "cashflow_rent", "cashflow_admin_fee", "cashflow_total",
+    "special_pension_payout",
+    "liability_duration", "gov_bond_duration", "corp_bond_duration", "alt_bond_duration",
+    "num_pensioners", "num_widows",
+    "interest_rate_cap_payout", "interest_rate_cap_active",
+    # Config-Parameter
+    "weight_gov_bonds", "weight_corp_bonds", "weight_equities",
+    "weight_real_estate", "weight_alternatives",
+    "initial_gov_bond_duration", "initial_corp_bond_duration",
+    "mu_interest_rate", "mu_equities", "sigma_equities",
+    "yield_curve_slope", "technical_rate_duration",
+    "liability_discount_spread", "technical_rate_floor",
+    "general_reserve_rate", "n_paths", "t_horizon",
+    # Bestand
+    "bestand_n_total", "bestand_avg_age",
+    "bestand_n_m", "bestand_n_f", "bestand_share_m", "bestand_share_f",
+    "bestand_n_married", "bestand_share_married", "bestand_share_single",
+    "bestand_total_initial_pension",
+    "bestand_pension_min", "bestand_pension_p10", "bestand_pension_p25",
+    "bestand_pension_median", "bestand_pension_mean", "bestand_pension_std",
+    "bestand_pension_p75", "bestand_pension_p90", "bestand_pension_max",
+    "bestand_W0", "bestand_spouse_age_diff_mean", "bestand_spouse_age_diff_std",
+    "bestand_spouse_pension_rate",
+    # Pop-Parameter aus Szenario
+    "pop_n_population", "pop_age_mean", "pop_pension_mean",
+    "pop_share_married", "pop_spouse_pension_rate", "pop_spouse_age_diff",
+    "pop_share_female"
+  )
+
+  for (col in num_cols) {
+    if (col %in% names(dt)) {
+      dt[, (col) := as.numeric(get(col))]
+    }
+  }
+  dt[, year := as.integer(year)]
+  dt[, scenario_id := as.integer(scenario_id)]
+
+  if (verbose) {
+    total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    n_scen <- uniqueN(dt$scenario_id)
+    n_paths <- uniqueN(dt$global_path_nr)
+    cat(sprintf("\n=== ZUSAMMENFASSUNG ===\n"))
+    cat(sprintf("Zeilen:            %s\n", format(nrow(dt), big.mark = "'")))
+    cat(sprintf("Szenarien:         %d\n", n_scen))
+    cat(sprintf("Globale Pfade:     %s\n", format(n_paths, big.mark = "'")))
+    cat(sprintf("Spalten:           %d\n", ncol(dt)))
+    cat(sprintf("Speicher:          %.1f MB\n", as.numeric(object.size(dt)) / 1024^2))
+    cat(sprintf("Gesamtzeit:        %.1f Sek.\n", total_time))
+    cat(sprintf("Durchsatz:         %s Zeilen/Sek.\n",
+                format(round(nrow(dt) / total_time), big.mark = "'")))
+  }
+
+  return(dt)
+}
+
+
+load_sensitivity_summary <- function(data_dir = "data/sensitivity/",
+                                     filename = "sensitivity_summary.csv") {
+  #' Lädt die Übersichts-CSV mit einer Zeile pro Szenario
+  #'
+  #' @param data_dir   Verzeichnis
+  #' @param filename   Dateiname der Summary-CSV
+  #' @return data.table
+
+  filepath <- file.path(data_dir, filename)
+  if (!file.exists(filepath)) {
+    stop("Summary-Datei nicht gefunden: ", filepath)
+  }
+
+  dt <- fread(filepath, sep = ";", dec = ".", stringsAsFactors = FALSE)
+  cat(sprintf("Summary geladen: %d Szenarien, %d Spalten\n", nrow(dt), ncol(dt)))
+  return(dt)
+}
+
+
+# ==============================================================================
+# 2. SENSITIVITÄTSANALYSE: Risikometriken pro Szenario (parallelisiert)
+# ==============================================================================
+
+compute_scenario_risk_metrics <- function(dt,
+                                          dg_threshold = 0.80,
+                                          n_cores = NULL) {
+  #' Berechnet Risikometriken pro Szenario (parallelisiert via data.table)
+  #'
+  #' @param dt           data.table aus load_sensitivity_data()
+  #' @param dg_threshold Schwelle für Unterdeckung (Default: 0.80 = 80%)
+  #' @param n_cores      Anzahl Kerne für data.table (NULL = auto)
+  #' @return data.table mit einer Zeile pro Szenario
+
+  if (!is.null(n_cores)) setDTthreads(n_cores)
+  dt <- as.data.table(dt)
+
+  cat("Berechne Risikometriken pro Szenario...\n")
+  start_time <- Sys.time()
+
+  # --- Pro Pfad: min DG, Default-Jahr, Terminal-DG ---
+  path_stats <- dt[, .(
+    min_dg         = min(deckungsgrad, na.rm = TRUE),
+    terminal_dg    = deckungsgrad[which.max(year)],
+    terminal_V     = V_t[which.max(year)],
+    terminal_W     = W_t[which.max(year)],
+    has_underfunding = any(deckungsgrad < dg_threshold),
+    has_default    = any(V_t <= 0),
+    first_uf_year  = fifelse(any(deckungsgrad < dg_threshold),
+                             min(year[deckungsgrad < dg_threshold]),
+                             NA_real_),
+    cum_portfolio  = prod(1 + portfolio_return) - 1,
+    mean_cashflow  = mean(cashflow_total, na.rm = TRUE),
+    max_r1t        = max(r1_t, na.rm = TRUE),
+    min_r1t        = min(r1_t, na.rm = TRUE)
+  ), by = .(scenario_id, path_nr)]
+
+  # --- Aggregation pro Szenario ---
+  scenario_risk <- path_stats[, .(
+    n_paths             = .N,
+    prob_underfunding   = mean(has_underfunding),
+    prob_default        = mean(has_default),
+    n_underfunding      = sum(has_underfunding),
+    n_default           = sum(has_default),
+    # Terminal Deckungsgrad
+    end_dg_mean         = mean(terminal_dg, na.rm = TRUE),
+    end_dg_median       = median(terminal_dg, na.rm = TRUE),
+    end_dg_p5           = quantile(terminal_dg, 0.05, na.rm = TRUE),
+    end_dg_p25          = quantile(terminal_dg, 0.25, na.rm = TRUE),
+    end_dg_p75          = quantile(terminal_dg, 0.75, na.rm = TRUE),
+    end_dg_p95          = quantile(terminal_dg, 0.95, na.rm = TRUE),
+    # Minimum Deckungsgrad
+    min_dg_mean         = mean(min_dg, na.rm = TRUE),
+    min_dg_p5           = quantile(min_dg, 0.05, na.rm = TRUE),
+    # Shortfall
+    mean_shortfall      = mean(pmax(0, dg_threshold - min_dg), na.rm = TRUE),
+    cvar_dg             = mean(terminal_dg[terminal_dg <= quantile(terminal_dg, 0.05)],
+                               na.rm = TRUE),
+    # Rendite
+    cum_return_mean     = mean(cum_portfolio, na.rm = TRUE),
+    cum_return_p5       = quantile(cum_portfolio, 0.05, na.rm = TRUE),
+    # Cashflow
+    mean_cashflow       = mean(mean_cashflow, na.rm = TRUE),
+    # Timing
+    mean_uf_year        = mean(first_uf_year, na.rm = TRUE)
+  ), by = scenario_id]
+
+  # --- Szenario-Parameter joinen ---
+  scenario_params <- unique(dt[, .(
+    scenario_id,
+    weight_gov_bonds, weight_corp_bonds, weight_equities,
+    weight_real_estate, weight_alternatives,
+    gov_bond_duration_mode, corp_bond_duration_mode,
+    initial_gov_bond_duration, initial_corp_bond_duration,
+    sammelstiftung_enabled, sammelstiftung_interval,
+    pop_n_population, pop_age_mean, pop_pension_mean,
+    pop_share_married, pop_spouse_pension_rate,
+    bestand_n_total, bestand_avg_age, bestand_share_married,
+    bestand_pension_mean, bestand_W0, bestand_spouse_pension_rate,
+    general_reserve_rate
+  )], by = "scenario_id")
+
+  # Falls pop_-Spalten nicht existieren (ältere Daten), graceful degradation
+  cols_to_join <- intersect(names(scenario_params), names(dt))
+  scenario_params <- unique(dt[, ..cols_to_join])
+
+  result <- scenario_risk[scenario_params, on = "scenario_id", nomatch = NULL]
+
+  elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+  cat(sprintf("Fertig: %d Szenarien in %.1f Sek.\n", nrow(result), elapsed))
+
+  return(result)
+}
+
+
+# ==============================================================================
+# 3. GRAFISCHE SENSITIVITÄTSANALYSEN
+# ==============================================================================
+
+# --------------------------------------------------------------------------
+# 3a. Tornado-Diagramm: Welcher Parameter hat den grössten Einfluss?
+# --------------------------------------------------------------------------
+
+plot_sensitivity_tornado <- function(risk_dt,
+                                     target_var = "prob_underfunding",
+                                     target_label = "P(Unterdeckung)") {
+  #' Tornado-Diagramm: Einfluss jedes variierten Parameters auf die Zielgrösse
+  #'
+  #' @param risk_dt      data.table aus compute_scenario_risk_metrics()
+  #' @param target_var   Zielgrösse (Spaltenname)
+  #' @param target_label Label für die Achse
+  #' @return ggplot
+
+  dt <- as.data.table(risk_dt)
+
+  # Parameter die variiert wurden (nur numerische)
+  param_cols <- c(
+    "pop_n_population", "pop_age_mean", "pop_pension_mean",
+    "pop_share_married", "pop_spouse_pension_rate",
+    "weight_gov_bonds", "weight_corp_bonds", "weight_equities",
+    "weight_real_estate", "weight_alternatives",
+    "initial_gov_bond_duration", "initial_corp_bond_duration"
+  )
+  param_cols <- intersect(param_cols, names(dt))
+
+  # Für jeden Parameter: Range des Targets bei Min vs. Max des Parameters
+  tornado_data <- lapply(param_cols, function(p) {
+    if (!is.numeric(dt[[p]]) || uniqueN(dt[[p]]) < 2) return(NULL)
+
+    # Dezile des Parameters
+    q_low  <- quantile(dt[[p]], 0.1, na.rm = TRUE)
+    q_high <- quantile(dt[[p]], 0.9, na.rm = TRUE)
+
+    if (q_low == q_high) return(NULL)
+
+    val_low  <- mean(dt[get(p) <= q_low, get(target_var)], na.rm = TRUE)
+    val_high <- mean(dt[get(p) >= q_high, get(target_var)], na.rm = TRUE)
+
+    data.table(
+      parameter = p,
+      low_val   = val_low,
+      high_val  = val_high,
+      range     = abs(val_high - val_low)
+    )
+  })
+
+  tornado_dt <- rbindlist(tornado_data[!sapply(tornado_data, is.null)])
+
+  if (nrow(tornado_dt) == 0) {
+    cat("Keine variierten Parameter gefunden.\n")
+    return(NULL)
+  }
+
+  # Schöne Labels
+  label_map <- c(
+    pop_n_population       = "Bestandsgrösse",
+    pop_age_mean           = "Durchschnittsalter",
+    pop_pension_mean       = "Mittlere Rente",
+    pop_share_married      = "Anteil Verheiratete",
+    pop_spouse_pension_rate = "Ehegattenrente (%)",
+    weight_gov_bonds       = "Gov Bonds Gewicht",
+    weight_corp_bonds      = "Corp Bonds Gewicht",
+    weight_equities        = "Aktien Gewicht",
+    weight_real_estate     = "Immobilien Gewicht",
+    weight_alternatives    = "Alternatives Gewicht",
+    initial_gov_bond_duration = "Gov Bond Duration",
+    initial_corp_bond_duration = "Corp Bond Duration"
+  )
+
+  tornado_dt[, param_label := ifelse(
+    parameter %in% names(label_map),
+    label_map[parameter],
+    parameter
+  )]
+
+  baseline <- mean(dt[[target_var]], na.rm = TRUE)
+
+  p <- ggplot(tornado_dt, aes(x = reorder(param_label, range))) +
+    geom_segment(aes(y = low_val, yend = high_val, xend = param_label),
+                 linewidth = 6, color = "#2E86AB", alpha = 0.7) +
+    geom_point(aes(y = low_val), size = 3, color = "#1B5E7B") +
+    geom_point(aes(y = high_val), size = 3, color = "#1B5E7B") +
+    geom_hline(yintercept = baseline, linetype = "dashed", color = "red", linewidth = 0.8) +
+    annotate("text", x = 0.5, y = baseline, label = sprintf("Basis: %.1f%%", baseline * 100),
+             hjust = -0.1, color = "red", size = 3.5) +
+    coord_flip() +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    labs(
+      title = paste("Tornado-Diagramm:", target_label),
+      subtitle = "Effekt der Parameter-Variation (10. vs. 90. Perzentil)",
+      x = NULL,
+      y = target_label
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(panel.grid.major.y = element_blank())
+
+  return(p)
+}
+
+
+# --------------------------------------------------------------------------
+# 3b. Heatmap: Asset Allocation vs. Risiko
+# --------------------------------------------------------------------------
+
+plot_sensitivity_allocation_heatmap <- function(risk_dt,
+                                                 target_var = "prob_underfunding",
+                                                 target_label = "P(Unterdeckung)",
+                                                 x_var = "weight_equities",
+                                                 y_var = "weight_gov_bonds",
+                                                 x_label = "Aktien",
+                                                 y_label = "Gov Bonds") {
+  #' Heatmap: Zwei Allokationsdimensionen vs. Zielgrösse
+  #'
+  #' @param risk_dt      data.table aus compute_scenario_risk_metrics()
+  #' @param target_var   Zielgrösse
+  #' @param x_var, y_var Achsen-Variablen
+  #' @return ggplot
+
+  dt <- as.data.table(risk_dt)
+
+  # Aggregiere über andere Dimensionen (Mittelwert)
+  agg <- dt[, .(target = mean(get(target_var), na.rm = TRUE)),
+            by = .(x = get(x_var), y = get(y_var))]
+
+  p <- ggplot(agg, aes(x = x, y = y, fill = target)) +
+    geom_tile(color = "white", linewidth = 0.5) +
+    geom_text(aes(label = sprintf("%.1f%%", target * 100)),
+              color = "white", size = 3.5, fontface = "bold") +
+    scale_fill_viridis_c(name = target_label, labels = scales::percent,
+                         option = "magma", direction = -1) +
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    labs(
+      title = paste("Heatmap:", target_label),
+      subtitle = paste(x_label, "vs.", y_label, "(Mittelwert über andere Parameter)"),
+      x = x_label,
+      y = y_label
+    ) +
+    theme_minimal(base_size = 12)
+
+  return(p)
+}
+
+
+# --------------------------------------------------------------------------
+# 3c. Duration-Modus Vergleich
+# --------------------------------------------------------------------------
+
+plot_sensitivity_duration_mode <- function(risk_dt,
+                                            target_var = "prob_underfunding",
+                                            target_label = "P(Unterdeckung)") {
+  #' Box-Plot: Risiko nach Duration-Modus-Kombination
+  #'
+  #' @param risk_dt      data.table aus compute_scenario_risk_metrics()
+  #' @param target_var   Zielgrösse
+  #' @return ggplot
+
+  dt <- as.data.table(risk_dt)
+
+  dt[, dur_combo := paste0("Gov:", gov_bond_duration_mode,
+                           " / Corp:", corp_bond_duration_mode)]
+
+  # Box-Plot
+  p <- ggplot(as.data.frame(dt),
+              aes(x = reorder(dur_combo, get(target_var), FUN = median),
+                  y = get(target_var),
+                  fill = dur_combo)) +
+    geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    coord_flip() +
+    labs(
+      title = paste("Duration-Modus:", target_label),
+      subtitle = "Roter Diamant = Mittelwert",
+      x = NULL,
+      y = target_label
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none")
+
+  return(p)
+}
+
+
+# --------------------------------------------------------------------------
+# 3d. Sammelstiftung-Effekt
+# --------------------------------------------------------------------------
+
+plot_sensitivity_sammelstiftung <- function(risk_dt,
+                                            target_var = "prob_underfunding",
+                                            target_label = "P(Unterdeckung)") {
+  #' Vergleich: Mit vs. ohne Sammelstiftung-Modus
+  #'
+  #' @param risk_dt    data.table aus compute_scenario_risk_metrics()
+  #' @param target_var Zielgrösse
+  #' @return ggplot
+
+  dt <- as.data.table(risk_dt)
+
+  if (!"sammelstiftung_enabled" %in% names(dt)) {
+    cat("Spalte 'sammelstiftung_enabled' nicht vorhanden.\n")
+    return(NULL)
+  }
+
+  dt[, ss_label := fifelse(sammelstiftung_enabled == TRUE | sammelstiftung_enabled == "True",
+                           "Sammelstiftung", "Kein SS-Modus")]
+
+  # Paired comparison: gleiche Strategie mit/ohne SS
+  paired <- dt[, .(mean_target = mean(get(target_var), na.rm = TRUE)),
+               by = .(ss_label, weight_gov_bonds, weight_corp_bonds, weight_equities,
+                     weight_real_estate, weight_alternatives,
+                     gov_bond_duration_mode, corp_bond_duration_mode)]
+
+  p <- ggplot(as.data.frame(dt), aes(x = ss_label, y = get(target_var), fill = ss_label)) +
+    geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+    geom_jitter(alpha = 0.15, width = 0.15, size = 1) +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "red") +
+    scale_fill_manual(values = c("Sammelstiftung" = "#2E86AB", "Kein SS-Modus" = "#E94F37")) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    labs(
+      title = paste("Sammelstiftung-Effekt:", target_label),
+      subtitle = "Roter Diamant = Mittelwert",
+      x = NULL,
+      y = target_label
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none")
+
+  # Statistischer Test
+  vals_ss <- dt[ss_label == "Sammelstiftung", get(target_var)]
+  vals_no <- dt[ss_label == "Kein SS-Modus", get(target_var)]
+
+  if (length(vals_ss) > 1 && length(vals_no) > 1) {
+    wt <- wilcox.test(vals_ss, vals_no, conf.int = TRUE)
+    cat(sprintf("\n=== Wilcoxon-Test: Sammelstiftung-Effekt auf %s ===\n", target_label))
+    cat(sprintf("  Mittelwert SS:      %.2f%%\n", mean(vals_ss, na.rm = TRUE) * 100))
+    cat(sprintf("  Mittelwert kein SS: %.2f%%\n", mean(vals_no, na.rm = TRUE) * 100))
+    cat(sprintf("  p-Wert:             %.4f %s\n", wt$p.value,
+                ifelse(wt$p.value < 0.001, "***",
+                       ifelse(wt$p.value < 0.01, "**",
+                              ifelse(wt$p.value < 0.05, "*", "n.s.")))))
+  }
+
+  return(p)
+}
+
+
+# --------------------------------------------------------------------------
+# 3e. Populations-Sensitivität: Facetten-Plot
+# --------------------------------------------------------------------------
+
+plot_sensitivity_population <- function(risk_dt,
+                                         target_var = "prob_underfunding",
+                                         target_label = "P(Unterdeckung)") {
+  #' Einfluss der Populations-Parameter auf die Zielgrösse
+  #' Facetten-Plot: Jeder variierte Pop-Parameter als Panel
+  #'
+  #' @param risk_dt      data.table
+  #' @param target_var   Zielgrösse
+  #' @return ggplot
+
+  dt <- as.data.table(risk_dt)
+
+  pop_vars <- c("pop_n_population", "pop_age_mean", "pop_pension_mean",
+                "pop_share_married", "pop_spouse_pension_rate")
+  pop_vars <- intersect(pop_vars, names(dt))
+
+  pop_labels <- c(
+    pop_n_population       = "Bestandsgrösse",
+    pop_age_mean           = "Durchschnittsalter",
+    pop_pension_mean       = "Mittlere Rente (CHF)",
+    pop_share_married      = "Anteil Verheiratete",
+    pop_spouse_pension_rate = "Ehegattenrente (%)"
+  )
+
+  # Long-Format für Facetten
+  plot_rows <- lapply(pop_vars, function(pv) {
+    if (uniqueN(dt[[pv]]) < 2) return(NULL)
+    data.table(
+      param_name  = pop_labels[pv],
+      param_value = as.numeric(dt[[pv]]),
+      target      = dt[[target_var]]
+    )
+  })
+
+  plot_dt <- rbindlist(plot_rows[!sapply(plot_rows, is.null)])
+
+  if (nrow(plot_dt) == 0) {
+    cat("Keine variierten Populations-Parameter gefunden.\n")
+    return(NULL)
+  }
+
+  p <- ggplot(as.data.frame(plot_dt),
+              aes(x = factor(param_value), y = target)) +
+    geom_boxplot(fill = "#2E86AB", alpha = 0.6, outlier.alpha = 0.2) +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+    facet_wrap(~ param_name, scales = "free_x", ncol = 3) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    labs(
+      title = paste("Populations-Sensitivität:", target_label),
+      subtitle = "Roter Diamant = Mittelwert; Boxplot = Streuung über Strategie-Varianten",
+      x = "Parameter-Wert",
+      y = target_label
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(strip.text = element_text(face = "bold", size = 10),
+          axis.text.x = element_text(size = 8))
+
+  return(p)
+}
+
+
+# --------------------------------------------------------------------------
+# 3f. Deckungsgrad-Fächer: Zeitverlauf pro Szenario-Gruppe
+# --------------------------------------------------------------------------
+
+plot_sensitivity_dg_fan <- function(dt,
+                                    group_var = "gov_bond_duration_mode",
+                                    group_label = "Duration-Modus",
+                                    max_scenarios_per_group = 5) {
+  #' Deckungsgrad-Fächer (P5/P25/Median/P75/P95) nach Szenario-Gruppe
+  #'
+  #' @param dt              data.table aus load_sensitivity_data()
+  #' @param group_var       Gruppierungsvariable
+  #' @param group_label     Label für die Legende
+  #' @param max_scenarios_per_group  Max. Szenarien pro Gruppe (Performance)
+  #' @return ggplot
+
+  dt <- as.data.table(dt)
+
+  if (!group_var %in% names(dt)) {
+    stop("Spalte '", group_var, "' nicht in den Daten.")
+  }
+
+  # Für Performance: nur Subset
+  selected_scenarios <- dt[, .(n = .N), by = .(scenario_id, grp = get(group_var))][
+    , .SD[1:min(.N, max_scenarios_per_group)], by = grp]$scenario_id
+
+  dg_stats <- dt[scenario_id %in% selected_scenarios, .(
+    median_dg = median(deckungsgrad, na.rm = TRUE),
+    p5_dg     = quantile(deckungsgrad, 0.05, na.rm = TRUE),
+    p25_dg    = quantile(deckungsgrad, 0.25, na.rm = TRUE),
+    p75_dg    = quantile(deckungsgrad, 0.75, na.rm = TRUE),
+    p95_dg    = quantile(deckungsgrad, 0.95, na.rm = TRUE)
+  ), by = .(year, group = get(group_var))]
+
+  p <- ggplot(as.data.frame(dg_stats), aes(x = year)) +
+    geom_ribbon(aes(ymin = p5_dg, ymax = p95_dg, fill = group), alpha = 0.15) +
+    geom_ribbon(aes(ymin = p25_dg, ymax = p75_dg, fill = group), alpha = 0.25) +
+    geom_line(aes(y = median_dg, color = group), linewidth = 1) +
+    geom_hline(yintercept = 1.0, linetype = "dotted", color = "gray40") +
+    geom_hline(yintercept = 0.8, linetype = "dashed", color = "red", alpha = 0.5) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                       limits = c(0, NA)) +
+    scale_x_continuous(breaks = seq(0, 50, 5)) +
+    labs(
+      title = paste("Deckungsgrad-Fächer nach", group_label),
+      subtitle = "Bänder: P5-P95 (hell), P25-P75 (dunkel), Linie: Median",
+      x = "Jahr",
+      y = "Deckungsgrad",
+      fill = group_label,
+      color = group_label
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+
+  return(p)
+}
+
+
+# --------------------------------------------------------------------------
+# 3g. Interaktionseffekte: Allocation x Duration x Population
+# --------------------------------------------------------------------------
+
+plot_sensitivity_interaction <- function(risk_dt,
+                                          x_var = "pop_age_mean",
+                                          color_var = "gov_bond_duration_mode",
+                                          target_var = "prob_underfunding",
+                                          x_label = "Durchschnittsalter",
+                                          color_label = "Duration-Modus",
+                                          target_label = "P(Unterdeckung)") {
+  #' Interaktionsplot: Parameter x vs. Zielgrösse, eingefärbt nach Gruppe
+  #'
+  #' @param risk_dt    data.table
+  #' @param x_var      X-Achse
+  #' @param color_var  Einfärbung
+  #' @param target_var Zielgrösse
+  #' @return ggplot
+
+  dt <- as.data.table(risk_dt)
+
+  p <- ggplot(as.data.frame(dt),
+              aes(x = get(x_var), y = get(target_var), color = factor(get(color_var)))) +
+    geom_point(alpha = 0.4, size = 2) +
+    geom_smooth(method = "loess", se = TRUE, alpha = 0.15, linewidth = 1) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    labs(
+      title = paste("Interaktion:", x_label, "x", color_label),
+      x = x_label,
+      y = target_label,
+      color = color_label
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+
+  return(p)
+}
+
+
+# ==============================================================================
+# 4. KOMPLETT-AUSWERTUNG: Alle Analysen auf einmal
+# ==============================================================================
+
+run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
+                                     n_cores = NULL,
+                                     dg_threshold = 0.80,
+                                     save_plots = FALSE,
+                                     plot_dir = "data/sensitivity/plots/") {
+  #' Führt die komplette Sensitivitätsanalyse durch:
+  #' 1. Daten laden (parallelisiert)
+  #' 2. Risikometriken berechnen
+  #' 3. Alle Visualisierungen erstellen
+  #'
+  #' @param data_dir      Verzeichnis mit sensitivity_scenario_*.csv Dateien
+  #' @param n_cores       Anzahl CPU-Kerne (NULL = auto)
+  #' @param dg_threshold  Schwelle für Unterdeckung
+  #' @param save_plots    Plots als PNG speichern?
+  #' @param plot_dir      Verzeichnis für PNG-Dateien
+  #' @return Liste mit dt (Rohdaten), risk (Risikometriken), plots (alle Grafiken)
+
+  if (is.null(n_cores)) n_cores <- max(1, detectCores() - 1)
+  setDTthreads(n_cores)
+
+  cat(sprintf("\n%s\n", paste(rep("=", 70), collapse = "")))
+  cat("SENSITIVITÄTSANALYSE - KOMPLETT-AUSWERTUNG\n")
+  cat(sprintf("%s\n\n", paste(rep("=", 70), collapse = "")))
+
+  overall_start <- Sys.time()
+
+  # --- 1. Daten laden ---
+  cat("--- 1. DATEN LADEN ---\n")
+  dt <- load_sensitivity_data(data_dir, n_cores = n_cores)
+
+  # --- 2. Risikometriken ---
+  cat("\n--- 2. RISIKOMETRIKEN ---\n")
+  risk <- compute_scenario_risk_metrics(dt, dg_threshold = dg_threshold,
+                                        n_cores = n_cores)
+
+  cat(sprintf("\n=== RISIKO-ÜBERSICHT ===\n"))
+  cat(sprintf("  Szenarien total:        %d\n", nrow(risk)))
+  cat(sprintf("  P(UF) Mittelwert:       %.1f%%\n", mean(risk$prob_underfunding) * 100))
+  cat(sprintf("  P(UF) Range:            %.1f%% - %.1f%%\n",
+              min(risk$prob_underfunding) * 100, max(risk$prob_underfunding) * 100))
+  cat(sprintf("  P(Default) Mittelwert:  %.1f%%\n", mean(risk$prob_default) * 100))
+  cat(sprintf("  End-DG Mittelwert:      %.1f%%\n", mean(risk$end_dg_mean) * 100))
+  cat(sprintf("  End-DG P5:              %.1f%%\n", mean(risk$end_dg_p5) * 100))
+
+  # --- 3. Grafiken ---
+  cat("\n--- 3. GRAFIKEN ---\n")
+  plots <- list()
+
+  # 3a. Tornado: P(Unterdeckung)
+  cat("  Tornado-Diagramm (Unterdeckung)...\n")
+  plots$tornado_uf <- plot_sensitivity_tornado(risk, "prob_underfunding", "P(Unterdeckung)")
+
+  # 3a2. Tornado: P(Default)
+  cat("  Tornado-Diagramm (Default)...\n")
+  plots$tornado_default <- plot_sensitivity_tornado(risk, "prob_default", "P(Default)")
+
+  # 3a3. Tornado: End-DG
+  cat("  Tornado-Diagramm (End-Deckungsgrad)...\n")
+  plots$tornado_dg <- plot_sensitivity_tornado(risk, "end_dg_mean", "E[Deckungsgrad]")
+
+  # 3b. Heatmap: Equities vs. Gov Bonds
+  cat("  Heatmap (Aktien vs. Gov Bonds)...\n")
+  plots$heatmap_eq_gov <- plot_sensitivity_allocation_heatmap(
+    risk, "prob_underfunding", "P(Unterdeckung)",
+    "weight_equities", "weight_gov_bonds", "Aktien", "Gov Bonds"
+  )
+
+  # 3b2. Heatmap: Corp Bonds vs. Real Estate
+  cat("  Heatmap (Corp Bonds vs. Immobilien)...\n")
+  plots$heatmap_corp_re <- plot_sensitivity_allocation_heatmap(
+    risk, "prob_underfunding", "P(Unterdeckung)",
+    "weight_corp_bonds", "weight_real_estate", "Corp Bonds", "Immobilien"
+  )
+
+  # 3c. Duration-Modi
+  cat("  Duration-Modus Vergleich...\n")
+  plots$duration_uf <- plot_sensitivity_duration_mode(risk, "prob_underfunding", "P(Unterdeckung)")
+  plots$duration_dg <- plot_sensitivity_duration_mode(risk, "end_dg_mean", "E[End-Deckungsgrad]")
+
+  # 3d. Sammelstiftung
+  cat("  Sammelstiftung-Effekt...\n")
+  plots$ss_uf <- plot_sensitivity_sammelstiftung(risk, "prob_underfunding", "P(Unterdeckung)")
+  plots$ss_dg <- plot_sensitivity_sammelstiftung(risk, "end_dg_mean", "E[End-Deckungsgrad]")
+
+  # 3e. Populations-Sensitivität
+  cat("  Populations-Sensitivität...\n")
+  plots$pop_uf <- plot_sensitivity_population(risk, "prob_underfunding", "P(Unterdeckung)")
+  plots$pop_dg <- plot_sensitivity_population(risk, "end_dg_mean", "E[End-Deckungsgrad]")
+
+  # 3f. DG-Fächer nach Duration-Modus
+  cat("  DG-Fächer (Duration-Modus)...\n")
+  plots$fan_duration <- plot_sensitivity_dg_fan(
+    dt, "gov_bond_duration_mode", "Duration-Modus"
+  )
+
+  # 3f2. DG-Fächer nach Sammelstiftung
+  if ("sammelstiftung_enabled" %in% names(dt)) {
+    cat("  DG-Fächer (Sammelstiftung)...\n")
+    plots$fan_ss <- plot_sensitivity_dg_fan(
+      dt, "sammelstiftung_enabled", "Sammelstiftung"
+    )
+  }
+
+  # 3g. Interaktionseffekte
+  cat("  Interaktionsplots...\n")
+  plots$interact_age_dur <- plot_sensitivity_interaction(
+    risk, "pop_age_mean", "gov_bond_duration_mode",
+    "prob_underfunding", "Durchschnittsalter", "Duration-Modus", "P(Unterdeckung)"
+  )
+
+  plots$interact_size_alloc <- plot_sensitivity_interaction(
+    risk, "pop_n_population", "weight_equities",
+    "prob_underfunding", "Bestandsgrösse", "Aktienquote", "P(Unterdeckung)"
+  )
+
+  plots$interact_married_ss <- plot_sensitivity_interaction(
+    risk, "pop_share_married", "sammelstiftung_enabled",
+    "prob_underfunding", "Anteil Verheiratete", "Sammelstiftung", "P(Unterdeckung)"
+  )
+
+  # --- Plots speichern falls gewünscht ---
+  if (save_plots) {
+    dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
+    cat(sprintf("\n--- PLOTS SPEICHERN nach %s ---\n", plot_dir))
+    for (pname in names(plots)) {
+      if (!is.null(plots[[pname]])) {
+        filepath <- file.path(plot_dir, paste0("sens_", pname, ".png"))
+        ggsave(filepath, plots[[pname]], width = 12, height = 8, dpi = 150)
+        cat(sprintf("  Gespeichert: %s\n", filepath))
+      }
+    }
+  }
+
+  # --- Alle Plots anzeigen ---
+  cat("\n--- PLOTS ANZEIGEN ---\n")
+  for (pname in names(plots)) {
+    if (!is.null(plots[[pname]])) {
+      cat(sprintf("  Plot: %s\n", pname))
+      print(plots[[pname]])
+    }
+  }
+
+  total_time <- as.numeric(difftime(Sys.time(), overall_start, units = "secs"))
+  cat(sprintf("\n%s\n", paste(rep("=", 70), collapse = "")))
+  cat(sprintf("ANALYSE ABGESCHLOSSEN in %.1f Sek.\n", total_time))
+  cat(sprintf("%s\n", paste(rep("=", 70), collapse = "")))
+
+  return(list(
+    dt    = dt,
+    risk  = risk,
+    plots = plots
+  ))
+}
+
+
+# ============================================================================
 # ENDE DER FUNKTIONSDATEI
 # ============================================================================
-# Letzte Änderung: 2025-01-15
+# Letzte Änderung: 2026-02-15
 # Status: Bereit für OneDrive-Synchronisation
 # ============================================================================

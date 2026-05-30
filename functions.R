@@ -693,7 +693,10 @@ library(scales)
 analyze_cashflow_dispersion <- function(df, years_to_analyze = 1:40) {
   #' @param df Bereits geladener Dataframe mit allen MC-Simulationen
   #' @param years_to_analyze Welche Jahre einbeziehen (default: 1-40)
-  
+
+  df <- as.data.frame(df)
+  years_to_analyze <- as.integer(years_to_analyze)
+
   # Bestand berechnen
   df <- df %>%
     filter(year %in% years_to_analyze) %>%
@@ -845,34 +848,39 @@ analyze_cashflow_dispersion <- function(df, years_to_analyze = 1:40) {
   }
   
   # --- PLOT 8: Facetten nach Bestandseigenschaften über Zeit ---
-  plots$cv_timeline_facet <- stats_by_config_year %>%
-    mutate(
-      size_cat = cut(bestand_n_total, breaks = 3, labels = c("Klein", "Mittel", "Gross")),
-      age_cat = cut(bestand_avg_age, breaks = 3, labels = c("Jung", "Mittel", "Alt"))
-    ) %>%
-    group_by(year, size_cat, age_cat) %>%
-    summarise(mean_cv = mean(cv_cashflow, na.rm = TRUE), .groups = "drop") %>%
-    ggplot(aes(x = year, y = mean_cv, color = size_cat)) +
-    geom_line(linewidth = 1) +
-    geom_point(size = 2) +
-    facet_wrap(~age_cat, labeller = labeller(age_cat = function(x) paste("Alter:", x))) +
-    scale_y_continuous(labels = percent) +
-    scale_color_brewer(name = "Bestandsgrösse", palette = "Set1") +
-    labs(title = "CV-Entwicklung nach Alter und Grösse",
-         x = "Jahr", y = "CV") +
-    theme_minimal()
+  if (n_distinct(stats_by_config_year$bestand_n_total) > 1 &
+      n_distinct(stats_by_config_year$bestand_avg_age) > 1) {
+    plots$cv_timeline_facet <- stats_by_config_year %>%
+      mutate(
+        size_cat = cut(bestand_n_total, breaks = 3, labels = c("Klein", "Mittel", "Gross")),
+        age_cat = cut(bestand_avg_age, breaks = 3, labels = c("Jung", "Mittel", "Alt"))
+      ) %>%
+      group_by(year, size_cat, age_cat) %>%
+      summarise(mean_cv = mean(cv_cashflow, na.rm = TRUE), .groups = "drop") %>%
+      ggplot(aes(x = year, y = mean_cv, color = size_cat)) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 2) +
+      facet_wrap(~age_cat, labeller = labeller(age_cat = function(x) paste("Alter:", x))) +
+      scale_y_continuous(labels = percent) +
+      scale_color_brewer(name = "Bestandsgrösse", palette = "Set1") +
+      labs(title = "CV-Entwicklung nach Alter und Grösse",
+           x = "Jahr", y = "CV") +
+      theme_minimal()
+  }
   
   # --- PLOT 9: Multivariate Übersicht (Scatter Matrix Style) ---
+  var_labels <- c(
+    bestand_n_total = "Bestandsgrösse",
+    bestand_avg_age = "Durchschnittsalter",
+    bestand_share_f = "Frauenanteil",
+    bestand_share_married = "Verheiratetenanteil",
+    pension_cv = "Pensions-Heterogenität"
+  )
   plots$scatter_overview <- stats_by_config %>%
-    select(cv_cashflow, bestand_n_total, bestand_avg_age, 
+    select(cv_cashflow, bestand_n_total, bestand_avg_age,
            bestand_share_f, bestand_share_married, pension_cv) %>%
     pivot_longer(-cv_cashflow, names_to = "variable", values_to = "value") %>%
-    mutate(variable = recode(variable,
-                             bestand_n_total = "Bestandsgrösse",
-                             bestand_avg_age = "Durchschnittsalter",
-                             bestand_share_f = "Frauenanteil",
-                             bestand_share_married = "Verheiratetenanteil",
-                             pension_cv = "Pensions-Heterogenität")) %>%
+    mutate(variable = var_labels[as.character(variable)]) %>%
     ggplot(aes(x = value, y = cv_cashflow)) +
     geom_point(alpha = 0.5, color = "steelblue") +
     geom_smooth(method = "lm", color = "darkred", se = TRUE, alpha = 0.2) +
@@ -889,21 +897,22 @@ analyze_cashflow_dispersion <- function(df, years_to_analyze = 1:40) {
            bestand_pension_mean, pension_cv) %>%
     cor(use = "complete.obs")
   
-  cor_long <- cor_data %>%
-    as.data.frame() %>%
-    rownames_to_column("var1") %>%
-    pivot_longer(-var1, names_to = "var2", values_to = "correlation")
+  cor_df <- as.data.frame(cor_data)
+  cor_df$var1 <- rownames(cor_df)
+  cor_long <- cor_df %>%
+    pivot_longer(-var1, names_to = "var2", values_to = "correlation") %>%
+    mutate(var1 = as.character(var1), var2 = as.character(var2))
   
+  cor_labels <- c(
+    cv_cashflow = "CV", bestand_n_total = "Grösse",
+    bestand_avg_age = "Alter", bestand_share_f = "Frauen",
+    bestand_share_married = "Verheiratet",
+    bestand_pension_mean = "Pension Ø", pension_cv = "Pension CV"
+  )
   plots$correlation <- cor_long %>%
     mutate(
-      var1 = recode(var1, cv_cashflow = "CV", bestand_n_total = "Grösse",
-                    bestand_avg_age = "Alter", bestand_share_f = "Frauen",
-                    bestand_share_married = "Verheiratet", 
-                    bestand_pension_mean = "Pension Ø", pension_cv = "Pension CV"),
-      var2 = recode(var2, cv_cashflow = "CV", bestand_n_total = "Grösse",
-                    bestand_avg_age = "Alter", bestand_share_f = "Frauen",
-                    bestand_share_married = "Verheiratet",
-                    bestand_pension_mean = "Pension Ø", pension_cv = "Pension CV")
+      var1 = cor_labels[var1],
+      var2 = cor_labels[var2]
     ) %>%
     ggplot(aes(x = var1, y = var2, fill = correlation)) +
     geom_tile(color = "white") +

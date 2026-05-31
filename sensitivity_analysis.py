@@ -19,6 +19,8 @@ Datengrundlage für eine systematische Sensitivitätsanalyse in RStudio.
 Verwendung:
     python sensitivity_analysis.py --n_paths 200 --t_horizon 40 --output_dir data/sensitivity
     python sensitivity_analysis.py --n_paths 500 --dry_run          # Nur Szenarien anzeigen
+  python sensitivity_analysis.py --n_paths 200 --lhs_samples 200  # Kompakter Lauf (200 Pop-Varianten)
+  python sensitivity_analysis.py --n_paths 200 --lhs_samples 1000 # Grosse Abdeckung (1000 Varianten)
     python sensitivity_analysis.py --n_paths 300 --resume 42        # Ab Szenario 42 fortsetzen
     python sensitivity_analysis.py --n_paths 200 --max_disk_gb 50   # Max. 50 GB Speicher
     python sensitivity_analysis.py --config scenarios.json          # Eigene Szenario-Datei
@@ -44,50 +46,36 @@ from pathlib import Path
 
 # --- A) RENTNERBESTAND (Demographie) ---
 POPULATION_GRID = {
-    'n_population':       [50, 100, 200],          # Bestandesgrösse
-    'age_mean':           [67, 72, 78],             # Durchschnittsalter
-    'pension_mean':       [25000, 35000, 50000],    # Durchschnittliche Jahresrente (CHF)
-    'share_married':      [0.30, 0.50, 0.70],      # Anteil Verheiratete
-    'spouse_pension_rate': [0.40, 0.60],            # Ehegattenrente in % der Rente
-    'spouse_age_diff':    [-3],                     # Altersdifferenz (neg = Partner jünger)
-    'share_female':       [0.55],                   # Anteil weiblich
+    'n_population':       [50, 100, 200, 500, 1000],          # Bestandesgrösse
+    'age_mean':           [67, 70, 72, 74, 76, 78, 80],             # Durchschnittsalter
+    'pension_mean':       [25000, 35000, 55000],    # Durchschnittliche Jahresrente (CHF)
+    'share_married':      [0.30, 0.50, 0.6, 0.70],      # Anteil Verheiratete
+    'spouse_pension_rate': [0.40, 0.5, 0.60],            # Ehegattenrente in % der Rente
+    'spouse_age_diff':    [-5, -3, -1, 0],                     # Altersdifferenz (neg = Partner jünger)
+    'share_female':       [0.6, 0.55, 0.5, 0.45, 0.4],                   # Anteil weiblich
 }
 
 # --- B) ASSET ALLOCATION & STRATEGIE ---
 # Jedes Tuple: (GovBonds, CorpBonds, Equities, RealEstate, Alternatives)
 # Summe muss 1.0 ergeben, InterestRate-Gewicht ist immer 0
 ALLOCATION_GRID = [
-    # Konservativ: Bond-lastig
-    (0.50, 0.30, 0.00, 0.20, 0.00),
-    (0.60, 0.25, 0.05, 0.10, 0.00),
-    (0.40, 0.40, 0.00, 0.20, 0.00),
-    # Balanced
-    (0.30, 0.30, 0.10, 0.20, 0.10),
-    (0.20, 0.35, 0.10, 0.25, 0.10),
-    (0.10, 0.55, 0.00, 0.35, 0.00),
+
     # Mit Alternatives / Infrastructure Debt
-    (0.20, 0.30, 0.05, 0.20, 0.25),
-    (0.30, 0.20, 0.10, 0.15, 0.25),
-    (0.15, 0.35, 0.00, 0.25, 0.25),
-    # Aktien-betont
-    (0.30, 0.20, 0.20, 0.20, 0.10),
-    (0.20, 0.25, 0.25, 0.20, 0.10),
+
+    (0.35, 0.20, 0.05, 0.15, 0.25),
+
+
 ]
 
 # --- C) DURATION-STRATEGIEN ---
 DURATION_GRID = [
     # (gov_mode, corp_mode, gov_init_dur, corp_init_dur)
-    ('cashflow_matching', 'cashflow_matching', 22.0, 8.0),
-    ('fixed_reset',       'fixed_reset',       15.0, 6.0),
-    ('fixed_reset',       'fixed_reset',       22.0, 8.0),
-    ('liability_matching', 'liability_matching', 18.0, 8.0),
     ('fixed',              'fixed',             20.0, 10.0),
 ]
 
 # --- D) SAMMELSTIFTUNG ---
 SAMMELSTIFTUNG_GRID = [
     (False, 5),
-    (True,  5),
 ]
 
 
@@ -203,49 +191,109 @@ def check_disk_space(output_dir, min_free_gb=2.0, max_used_gb=None):
     return ok, free_gb, used_gb
 
 
-def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid):
+def _lhs_sample(param_grid, n_samples, seed=0):
     """
-    Erzeugt die vollständige Szenario-Liste als kartesisches Produkt
-    der relevanten Parameter-Dimensionen.
+    Latin Hypercube Sampling über diskrete Parameter-Grids.
 
-    Strategie: NICHT das volle kartesische Produkt aller Populationsparameter
-    verwenden (das wäre zu gross), sondern einen intelligenten Ansatz:
-    - Basis-Population (Default-Werte) als Referenz
-    - Pro Populationsparameter: Variation bei sonst fixen Werten (OAT)
-    - Jede Population-Variante x alle Allokations/Duration/Sammelstiftung-Kombinationen
+    Jede Dimension wird in n_samples gleichgrosse Schichten (Strata) eingeteilt.
+    Pro Stratum wird genau ein Wert gezogen, danach werden die Dimensionen
+    unabhängig voneinander permutiert – das garantiert, dass jede Schicht
+    pro Dimension genau einmal vertreten ist (maximale Spread-Eigenschaft).
+
+    Args:
+        param_grid:  Dict {param_name: [wert1, wert2, ...]}
+        n_samples:   Anzahl LHS-Stichproben
+        seed:        Random Seed für Reproduzierbarkeit
+
+    Returns:
+        Liste von Dicts mit einer Parameterkombination pro Eintrag
+    """
+    rng = np.random.RandomState(seed)
+    param_names = list(param_grid.keys())
+    param_values = [param_grid[k] for k in param_names]
+    n_dims = len(param_names)
+
+    # Pro Dimension: n_samples Strata, je ein gleichmässig verteilter Wert
+    # aus [i/n_samples, (i+1)/n_samples], dann auf diskrete Grid-Werte mappen
+    unit_samples = np.zeros((n_samples, n_dims))
+    for d in range(n_dims):
+        # Stratum-Mittelpunkte + kleines Rauschen innerhalb des Stratums
+        strata = (np.arange(n_samples) + rng.uniform(0, 1, n_samples)) / n_samples
+        rng.shuffle(strata)                    # unabhaengige Permutation pro Dimension
+        unit_samples[:, d] = strata
+
+    # Einheitswerte [0,1] auf diskrete Grid-Werte mappen
+    samples = []
+    for i in range(n_samples):
+        combo = {}
+        for d, name in enumerate(param_names):
+            vals = param_values[d]
+            # Index: u in [0,1] -> Index in [0, len(vals)-1]
+            idx = int(unit_samples[i, d] * len(vals))
+            idx = min(idx, len(vals) - 1)      # Randfall absichern
+            combo[name] = vals[idx]
+        samples.append(combo)
+
+    return samples
+
+
+def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid,
+                        lhs_samples=500, lhs_seed=0):
+    """
+    Erzeugt die Szenario-Liste via Latin Hypercube Sampling (LHS).
+
+    Statt OAT (One-At-a-Time, 25 Varianten) oder dem vollen kartesischen
+    Produkt (5x7x3x4x3x4x5 = 25'200 Varianten) deckt LHS den gesamten
+    Parameterraum mit konfigurierbarer Stichprobenzahl gleichmaessig ab:
+
+      - Der 7-dimensionale Populationsraum wird in n=lhs_samples Punkte
+        aufgeteilt, sodass jede Dimension (Groesse, Alter, Rente, ...)
+        gleichmaessig repraesentiert ist.
+      - Korrelationen zwischen Parametern sind nicht erzwungen – jede
+        Dimension wird unabhaengig permutiert (maximale Diversitaet).
+      - Zusaetzlich wird immer das Basis-Szenario (Referenz) eingefuegt,
+        damit ein bekannter Ankerpunkt vorhanden ist.
+      - Jede Pop-Variante wird mit allen Strategie-Kombinationen
+        (Allokation x Duration x Sammelstiftung) gekreuzt.
+
+    Parameterraum-Abdeckung gegenueber OAT:
+      OAT:  25 Varianten, testet Parameter nur isoliert
+      LHS:  lhs_samples Varianten (Default 500), erfasst Interaktionen
+
+    Args:
+        pop_grid:            Dict mit diskreten Wertemengen pro Parameter
+        alloc_grid:          Liste von Allokations-Tuples
+        duration_grid:       Liste von Duration-Tuples
+        sammelstiftung_grid: Liste von Sammelstiftung-Tuples
+        lhs_samples:         Anzahl LHS-Stichproben (Default: 500)
+        lhs_seed:            Random Seed fuer Reproduzierbarkeit (Default: 0)
 
     Returns:
         Liste von Szenario-Dicts
     """
     scenarios = []
 
-    # ---- Basis-Populationsparameter (Referenz-Szenario) ----
+    # ---- Basis-Populationsparameter (Referenz-Szenario, immer enthalten) ----
     base_pop = {
-        'n_population':       100,
-        'age_mean':           72,
-        'pension_mean':       35000,
-        'share_married':      0.50,
-        'spouse_pension_rate': 0.40,
-        'spouse_age_diff':    -3,
-        'share_female':       0.55,
+        'n_population':        100,
+        'age_mean':            72,
+        'pension_mean':        35000,
+        'share_married':       0.50,
+        'spouse_pension_rate':  0.40,
+        'spouse_age_diff':     -3,
+        'share_female':        0.55,
     }
 
-    # ---- Populations-Varianten (OAT: One-At-a-Time) ----
-    # Für jeden Parameter: Variiere ihn, lasse die anderen auf Base
-    pop_variants = [base_pop.copy()]  # Basis ist immer dabei
+    # ---- LHS-Sampling des Populations-Parameterraums ----------------------
+    lhs_variants = _lhs_sample(pop_grid, n_samples=lhs_samples, seed=lhs_seed)
 
-    for param_name, values in pop_grid.items():
-        for val in values:
-            if val == base_pop.get(param_name):
-                continue  # Basis-Wert überspringen (schon enthalten)
-            variant = base_pop.copy()
-            variant[param_name] = val
-            pop_variants.append(variant)
+    # Basis-Szenario vorne einfuegen (als Referenz-Ankerpunkt)
+    all_variants = [base_pop.copy()] + lhs_variants
 
-    # Deduplizierung (falls Basis-Werte in Grid enthalten)
+    # Deduplizierung (LHS kann gelegentlich denselben Gitterpunkt zweimal treffen)
     unique_pops = []
     seen = set()
-    for p in pop_variants:
+    for p in all_variants:
         key = tuple(sorted(p.items()))
         if key not in seen:
             seen.add(key)
@@ -608,6 +656,11 @@ Beispiele:
                         help='Pfad zu einer JSON-Datei mit benutzerdefinierten Szenarien')
     parser.add_argument('--pop_seed', type=int, default=42,
                         help='Random Seed für Populationsgenerierung (Default: 42)')
+    parser.add_argument('--lhs_samples', type=int, default=500,
+                        help='Anzahl Latin-Hypercube-Stichproben für Populations-Varianten '
+                             '(Default: 500). Gesamtszenarien = lhs_samples x Strategie-Kombinationen.')
+    parser.add_argument('--lhs_seed', type=int, default=0,
+                        help='Random Seed für LHS-Sampling (Default: 0, für Reproduzierbarkeit)')
 
     args = parser.parse_args()
 
@@ -633,7 +686,9 @@ Beispiele:
                 s['scenario_id'] = i + 1
     else:
         scenarios = build_scenario_list(
-            POPULATION_GRID, ALLOCATION_GRID, DURATION_GRID, SAMMELSTIFTUNG_GRID
+            POPULATION_GRID, ALLOCATION_GRID, DURATION_GRID, SAMMELSTIFTUNG_GRID,
+            lhs_samples=args.lhs_samples,
+            lhs_seed=args.lhs_seed,
         )
 
     n_total = len(scenarios)
@@ -654,7 +709,8 @@ Beispiele:
         for s in scenarios:
             pop_key = tuple((k, s[k]) for k in sorted(s.keys()) if k.startswith('pop_'))
             pop_keys.add(pop_key)
-        print(f"\n  Populations-Varianten:  {len(pop_keys)}")
+        n_lhs = getattr(args, 'lhs_samples', 500)
+        print(f"\n  Populations-Varianten:  {len(pop_keys)}  (LHS n={n_lhs}, seed={getattr(args, 'lhs_seed', 0)})")
 
         # Allokationen zählen
         alloc_keys = set()

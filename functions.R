@@ -1967,6 +1967,503 @@ run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
   ))
 }
 
+# ==============================================================================
+# cashflow_range_table()  &  cashflow_range_plot()
+# ------------------------------------------------------------------------------
+# Analysiert die SCHWANKUNGSBREITE der Cashflows in Abhängigkeit von vier
+# Bestandseigenschaften:
+#   1. Grösse           (bestand_n_total)
+#   2. Durchschnittsalter (bestand_avg_age)
+#   3. Zivilstand        (bestand_share_married)
+#   4. Ehegattenrente    (bestand_spouse_pension_rate)
+#
+# Metriken:
+#   CV          = SD / |Mean|              (Variationskoeffizient)
+#   Range_rel   = (P95 - P5) / |Median|   (robuste Schwankungsbreite)
+#   IQR_rel     = (P75 - P25) / |Median|  (Interquartilsabstand relativ)
+#
+# TABELLE: Pivotiert – Metriken als Zeilen, Klassen als Spalten
+#          Ein Block pro Eigenschaft
+#
+# PLOT:    Linienplot – Schwankungsbreite über Simulationsjahre,
+#          eine Linie pro Klasse, facettiert nach Eigenschaft
+#
+# Verwendung:
+#   result <- cashflow_range_table(df)
+#   result$table_gt          # formatierte gt-Tabelle
+#   result$table_df          # roher data.frame (für Export)
+#   cashflow_range_plot(df)  # Linienplot
+# ==============================================================================
+
+# ---- Hilfsfunktion: Klassen-Labels erstellen ---------------------------------
+# format_fn: optionale Funktion um Breakpoints zu formatieren (z.B. Tsd. für CHF)
+.make_bins <- function(x, n_bins, format_fn = NULL) {
+  probs  <- seq(0, 1, length.out = n_bins + 1)
+  breaks <- unique(quantile(x, probs = probs, na.rm = TRUE))
+  
+  if (length(breaks) < 3) {
+    # Zu wenige eindeutige Werte → direkte Faktoren mit echten Werten
+    vals <- sort(unique(round(x, 3)))
+    if (!is.null(format_fn)) {
+      return(factor(format_fn(x), levels = format_fn(vals)))
+    }
+    return(factor(round(x, 3), levels = vals))
+  }
+  
+  # Breaks mit format_fn oder kompakt formatieren
+  if (!is.null(format_fn)) {
+    # Labels manuell aus formatierten Breaks bauen
+    lo <- format_fn(breaks[-length(breaks)])
+    hi <- format_fn(breaks[-1])
+    labs <- paste0("[", lo, ", ", hi, "]")
+    lev <- cut(x, breaks = breaks, include.lowest = TRUE, labels = labs)
+  } else {
+    lev <- cut(x, breaks = breaks, include.lowest = TRUE, dig.lab = 4)
+  }
+  return(lev)
+}
+
+# Format-Funktionen für spezifische Eigenschaften
+.fmt_chf_tsd <- function(x) paste0(round(x / 1000, 0), "k")
+.fmt_pct1    <- function(x) paste0(round(x * 100, 0), "%")
+.fmt_num1    <- function(x) format(round(x, 1), big.mark = "'")
+
+# Welche format_fn soll für welche Spalte verwendet werden?
+.get_format_fn <- function(col) {
+  chf_cols  <- c("bestand_pension_mean", "bestand_pension_median",
+                 "bestand_total_initial_pension", "bestand_W0")
+  pct_cols  <- c("bestand_share_married", "bestand_share_f", "bestand_share_m",
+                 "bestand_share_single", "pop_share_married", "pop_share_female",
+                 "bestand_spouse_pension_rate", "pop_spouse_pension_rate")
+  if (col %in% chf_cols) return(.fmt_chf_tsd)
+  if (col %in% pct_cols) return(.fmt_pct1)
+  return(NULL)
+}
+
+# ---- Hilfsfunktion: Schwankungsmetriken pro Gruppe & Jahr -------------------
+.compute_metrics <- function(df_grp) {
+  df_grp %>%
+    summarise(
+      n_obs      = n(),
+      cf_mean    = mean(cashflow_rent,                    na.rm = TRUE),
+      cf_median  = median(cashflow_rent,                  na.rm = TRUE),
+      cf_sd      = sd(cashflow_rent,                      na.rm = TRUE),
+      cf_p5      = quantile(cashflow_rent, 0.05,          na.rm = TRUE),
+      cf_p25     = quantile(cashflow_rent, 0.25,          na.rm = TRUE),
+      cf_p75     = quantile(cashflow_rent, 0.75,          na.rm = TRUE),
+      cf_p95     = quantile(cashflow_rent, 0.95,          na.rm = TRUE),
+      .groups    = "drop"
+    ) %>%
+    mutate(
+      CV        = cf_sd   / abs(cf_mean),
+      Range_rel = (cf_p95 - cf_p5)  / abs(cf_median),
+      IQR_rel   = (cf_p75 - cf_p25) / abs(cf_median)
+    )
+}
+
+
+# ==============================================================================
+# 1. TABELLE
+# ==============================================================================
+
+cashflow_range_table <- function(
+    df,
+    n_bins        = 4,
+    print_table   = TRUE
+) {
+  #' @param df          Data frame mit MC-Pfaden
+  #' @param n_bins      Anzahl Quantilklassen pro Eigenschaft (Standard: 4)
+  #' @param print_table Tabelle auf Konsole ausgeben?
+  #' @return Liste: $table_df, $table_gt
+  
+  suppressPackageStartupMessages({
+    library(dplyr); library(tidyr); library(scales)
+  })
+  has_gt <- requireNamespace("gt", quietly = TRUE)
+  if (has_gt) library(gt)
+  
+  df <- as.data.frame(df)
+  
+  # Ehegattenrente: direkte Spalte oder Fallback
+  has_spouse <- "bestand_spouse_pension_rate" %in% names(df)
+  
+  # ---- Eigenschaften definieren ----------------------------------------------
+  props <- list(
+    list(col = "bestand_n_total",          label = "Grösse (n)"),
+    list(col = "bestand_avg_age",          label = "Durchschnittsalter"),
+    list(col = "bestand_share_married",    label = "Verheiratetenanteil"),
+    list(col = if (has_spouse) "bestand_spouse_pension_rate"
+         else            "bestand_share_married",
+         label = if (has_spouse) "Ehegattenrente-Rate"
+         else            "Ehegattenrente (Proxy: Verheiratetenanteil)"),
+    list(col = if ("bestand_spouse_age_diff_mean" %in% names(df))
+      "bestand_spouse_age_diff_mean"
+      else if ("pop_spouse_age_diff" %in% names(df))
+        "pop_spouse_age_diff"
+      else NULL,
+      label = "Altersunterschied Ehegatte"),
+    list(col = if ("pop_share_female" %in% names(df)) "pop_share_female"
+         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+         else NULL,
+         label = "Frauenanteil (Population)"),
+    list(col = if ("bestand_pension_mean" %in% names(df)) "bestand_pension_mean"
+         else NULL,
+         label = "Rentenhöhe Ø (CHF/Jahr)")
+  )
+  props <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), props)
+  
+  # ---- Pro Eigenschaft: aggregiere ÜBER ALLE JAHRE --------------------------
+  # (Schwankung = Streuung der Cashflows über MC-Pfade, nicht über Zeit)
+  
+  blocks <- lapply(props, function(p) {
+    
+    col    <- p$col
+    fmt_fn <- .get_format_fn(col)
+    
+    df_bin <- df %>%
+      filter(!is.na(.data[[col]]), !is.na(cashflow_rent)) %>%
+      mutate(Klasse = .make_bins(.data[[col]], n_bins, format_fn = fmt_fn))
+    
+    # Metriken pro Klasse (über alle Jahre + Pfade)
+    raw <- df_bin %>%
+      group_by(Klasse) %>%
+      .compute_metrics()
+    
+    # Pivot: Metriken als Zeilen, Klassen als Spalten
+    pivot <- raw %>%
+      select(Klasse, CV, Range_rel, IQR_rel) %>%
+      mutate(across(c(CV, Range_rel, IQR_rel), ~round(. * 100, 2))) %>%  # in %
+      pivot_longer(cols = c(CV, Range_rel, IQR_rel),
+                   names_to = "Metrik", values_to = "Wert") %>%
+      pivot_wider(names_from = Klasse, values_from = Wert) %>%
+      mutate(
+        Metrik = recode(Metrik,
+                        CV        = "CV = SD / |Mean| (%)",
+                        Range_rel = "P95-P5 / |Median| (%)",
+                        IQR_rel   = "IQR / |Median| (%)"
+        ),
+        Eigenschaft = p$label
+      ) %>%
+      select(Eigenschaft, Metrik, everything())
+    
+    return(pivot)
+  })
+  
+  tbl_df <- bind_rows(blocks)
+  
+  # ---- Konsolen-Ausgabe ------------------------------------------------------
+  if (print_table) {
+    cat("\n=== CASHFLOW-SCHWANKUNGSBREITEN NACH BESTANDSEIGENSCHAFTEN ===\n")
+    cat("Metriken in %, höher = grössere Schwankung\n\n")
+    for (b in blocks) {
+      cat(sprintf("── %s ──\n", unique(b$Eigenschaft)))
+      print(b %>% select(-Eigenschaft), row.names = FALSE)
+      cat("\n")
+    }
+  }
+  
+  # ---- gt-Tabelle ------------------------------------------------------------
+  tbl_gt <- NULL
+  if (has_gt) {
+    # Spalten dynamisch ermitteln (Klassennamen variieren je nach Daten)
+    klassen_cols <- setdiff(names(tbl_df), c("Eigenschaft", "Metrik"))
+    
+    tbl_gt <- tbl_df %>%
+      gt(groupname_col = "Eigenschaft", rowname_col = "Metrik") %>%
+      tab_header(
+        title    = md("**Cashflow-Schwankungsbreiten** nach Bestandseigenschaften"),
+        subtitle = md(paste0(
+          "Alle Metriken in % — höherer Wert = grössere Schwankung über MC-Pfade | ",
+          n_bins, " Klassen pro Eigenschaft"))
+      ) %>%
+      fmt_number(
+        columns  = all_of(klassen_cols),
+        decimals = 1,
+        pattern  = "{x}%"
+      ) %>%
+      # Heatmap-Farbe pro Zeile (jede Metrik hat eigene Skala)
+      data_color(
+        columns = all_of(klassen_cols),
+        rows    = grepl("CV", Metrik),
+        method  = "numeric",
+        palette = c("#2166ac", "#f7f7f7", "#d73027"),
+        na_color = "white"
+      ) %>%
+      data_color(
+        columns = all_of(klassen_cols),
+        rows    = grepl("P95", Metrik),
+        method  = "numeric",
+        palette = c("#2166ac", "#f7f7f7", "#d73027"),
+        na_color = "white"
+      ) %>%
+      data_color(
+        columns = all_of(klassen_cols),
+        rows    = grepl("IQR", Metrik),
+        method  = "numeric",
+        palette = c("#2166ac", "#f7f7f7", "#d73027"),
+        na_color = "white"
+      ) %>%
+      tab_spanner(
+        label   = "Klassen (Quantile der Eigenschaft)",
+        columns = all_of(klassen_cols)
+      ) %>%
+      tab_stubhead(label = "Metrik") %>%
+      tab_source_note(md(paste0(
+        "*CV = SD/|Mean| · P95–P5/|Median| · IQR/|Median| | ",
+        "cashflow\\_range\\_table() | ", format(Sys.Date(), "%d.%m.%Y"), "*"
+      ))) %>%
+      opt_stylize(style = 6, color = "blue") %>%
+      opt_table_font(font = list(google_font("Source Sans Pro"), default_fonts())) %>%
+      tab_options(
+        row_group.font.weight = "bold",
+        row_group.background.color = "#e8f0f7",
+        stub.font.weight = "bold"
+      )
+    
+    if (print_table) print(tbl_gt)
+  } else {
+    message("Paket 'gt' nicht installiert → install.packages('gt')")
+  }
+  
+  invisible(list(table_df = tbl_df, table_gt = tbl_gt))
+}
+
+
+# ==============================================================================
+# 2. LINIENPLOT – Schwankungsbreite über Simulationsjahre
+# ==============================================================================
+
+cashflow_range_plot <- function(
+    df,
+    metric  = "CV",         # "CV", "Range_rel", "IQR_rel", oder Vektor mit mehreren
+    n_bins  = 4,
+    palette = "Set2"        # RColorBrewer-Palette
+) {
+  #' Linienplot der Cashflow-Schwankungsbreite über die 40 Simulationsjahre
+  #'
+  #' @param df      Data frame mit MC-Pfaden (muss Spalte 'year' enthalten)
+  #' @param metric  Welche Metrik(en) plotten: "CV", "Range_rel", "IQR_rel"
+  #' @param n_bins  Anzahl Klassen pro Eigenschaft
+  #' @param palette RColorBrewer-Palette für Linienfarben
+  #' @return ggplot-Objekt (unsichtbar)
+  
+  suppressPackageStartupMessages({
+    library(dplyr); library(tidyr); library(ggplot2); library(scales); library(tibble)
+  })
+  
+  df <- as.data.frame(df)
+  has_spouse <- "bestand_spouse_pension_rate" %in% names(df)
+  
+  # Metrik-Labels
+  metric_labels <- c(
+    CV        = "CV = SD / |Mean|",
+    Range_rel = "P95-P5 / |Median|",
+    IQR_rel   = "IQR / |Median|"
+  )
+  metric <- intersect(metric, names(metric_labels))
+  if (length(metric) == 0) stop("Ungültige Metrik. Wähle: CV, Range_rel, IQR_rel")
+  
+  # ---- Eigenschaften ---------------------------------------------------------
+  props <- list(
+    list(col = "bestand_n_total",            label = "Grösse (n)"),
+    list(col = "bestand_avg_age",            label = "Durchschnittsalter"),
+    list(col = "bestand_share_married",      label = "Verheiratetenanteil"),
+    list(col = if (has_spouse) "bestand_spouse_pension_rate"
+         else            "bestand_share_married",
+         label = if (has_spouse) "Ehegattenrente-Rate"
+         else            "Ehegattenrente (Proxy)"),
+    list(col = if ("bestand_spouse_age_diff_mean" %in% names(df))
+      "bestand_spouse_age_diff_mean"
+      else if ("pop_spouse_age_diff" %in% names(df))
+        "pop_spouse_age_diff"
+      else NULL,
+      label = "Altersunterschied Ehegatte"),
+    list(col = if ("pop_share_female" %in% names(df)) "pop_share_female"
+         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+         else NULL,
+         label = "Frauenanteil (Population)"),
+    list(col = if ("bestand_pension_mean" %in% names(df)) "bestand_pension_mean"
+         else NULL,
+         label = "Rentenhöhe Ø (CHF/Jahr)")
+  )
+  # Eigenschaften ohne vorhandene Spalte entfernen
+  props <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), props)
+  
+  # ---- Pro Eigenschaft: Metriken pro Jahr & Klasse ---------------------------
+  all_data <- lapply(props, function(p) {
+    col <- p$col
+    
+    fmt_fn  <- .get_format_fn(col)
+    df_bin <- df %>%
+      filter(!is.na(.data[[col]]), !is.na(cashflow_rent), !is.na(year)) %>%
+      mutate(Klasse = as.character(.make_bins(.data[[col]], n_bins, format_fn = fmt_fn)))
+    
+    df_bin %>%
+      group_by(year, Klasse) %>%
+      .compute_metrics() %>%
+      mutate(
+        Eigenschaft = p$label,
+        # Rang innerhalb dieser Eigenschaft (1 = kleinste Klasse)
+        Klasse_rang = as.integer(factor(Klasse, levels = sort(unique(as.character(Klasse)))))
+      )
+  }) %>%
+    bind_rows()
+  
+  # ---- In Long-Format für ggplot ---------------------------------------------
+  plot_data <- all_data %>%
+    select(Eigenschaft, Klasse, Klasse_rang, year, all_of(metric)) %>%
+    pivot_longer(cols = all_of(metric),
+                 names_to = "Metrik", values_to = "Wert") %>%
+    mutate(
+      Metrik_label = metric_labels[Metrik],
+      Klasse       = factor(Klasse, levels = unique(Klasse))
+    )
+  
+  # ---- Farbpalette -----------------------------------------------------------
+  # Klassen-Labels unterscheiden sich pro Eigenschaft (z.B. "[50,200]" vs "[65,70]").
+  # Wir färben nach dem Rang (1 = kleinste Klasse) einheitlich über alle Facets.
+  basis_farben <- if (requireNamespace("RColorBrewer", quietly = TRUE)) {
+    RColorBrewer::brewer.pal(max(3, n_bins), palette)[seq_len(n_bins)]
+  } else {
+    scales::hue_pal()(n_bins)
+  }
+  
+  farben_named <- plot_data %>%
+    distinct(Klasse, Klasse_rang) %>%
+    mutate(farbe = basis_farben[pmin(Klasse_rang, length(basis_farben))]) %>%
+    select(Klasse, farbe) %>%
+    tibble::deframe()
+  
+  # ---- Endpunkt-Labels: letzter nicht-NA Wert pro Linie & Facet -------------
+  label_data <- plot_data %>%
+    group_by(Eigenschaft, Metrik, Klasse) %>%
+    filter(!is.na(Wert)) %>%
+    slice_max(year, n = 1) %>%
+    ungroup() %>%
+    # Vertikalen Versatz berechnen um Überlappungen zu minimieren:
+    # Linien mit ähnlichem Endwert innerhalb eines Facets werden gestaffelt.
+    group_by(Eigenschaft, Metrik) %>%
+    arrange(Wert, .by_group = TRUE) %>%
+    mutate(
+      rang_in_facet = row_number(),
+      n_in_facet    = n(),
+      # Y-Nudge: kleiner gleichmässiger Versatz basierend auf Rang im Facet
+      # Skaliert mit der Wert-Spannweite damit es proportional bleibt
+      y_spread   = max(Wert, na.rm = TRUE) - min(Wert, na.rm = TRUE),
+      y_nudge    = if_else(
+        n_in_facet > 1 & y_spread < 0.05,   # Linien liegen sehr nah beieinander
+        (rang_in_facet - median(seq_len(n_in_facet[1]))) * 0.015,
+        0
+      )
+    ) %>%
+    ungroup()
+  
+  use_repel <- requireNamespace("ggrepel", quietly = TRUE)
+  
+  x_max   <- max(plot_data$year, na.rm = TRUE)
+  x_break <- sort(unique(c(1, 5, 10, 20, 30, x_max)))
+  
+  # ---- Plot ------------------------------------------------------------------
+  n_metrics <- length(metric)
+  
+  p <- ggplot(plot_data,
+              aes(x = year, y = Wert, color = Klasse, group = Klasse)) +
+    geom_line(linewidth = 0.9, alpha = 0.85) +
+    geom_point(size = 1.0, alpha = 0.5) +
+    {
+      if (use_repel) {
+        # ggrepel: automatisches Anti-Overlap, Labels rechts der Linien
+        ggrepel::geom_text_repel(
+          data            = label_data,
+          aes(label       = Klasse, y = Wert + y_nudge),
+          hjust           = 0,
+          direction       = "y",
+          nudge_x         = 1.5,
+          segment.size    = 0.3,
+          segment.alpha   = 0.5,
+          segment.linetype = "dotted",
+          box.padding     = 0.15,
+          point.padding   = 0.1,
+          force           = 0.8,
+          force_pull      = 0.5,
+          max.overlaps    = Inf,
+          size            = 2.8,
+          fontface        = "bold",
+          show.legend     = FALSE
+        )
+      } else {
+        # Fallback ohne ggrepel: manueller Y-Versatz
+        geom_text(
+          data        = label_data,
+          aes(label   = Klasse, y = Wert + y_nudge),
+          hjust       = -0.08,
+          size        = 2.8,
+          fontface    = "bold",
+          show.legend = FALSE
+        )
+      }
+    } +
+    {
+      if (n_metrics > 1)
+        facet_grid(Eigenschaft ~ Metrik_label, scales = "free_y",
+                   labeller = labeller(Metrik_label = label_value))
+      else
+        facet_wrap(~ Eigenschaft, ncol = 4, scales = "free_y")
+    } +
+    scale_y_continuous(labels = percent_format(accuracy = 0.1)) +
+    scale_x_continuous(
+      breaks = x_break,
+      expand = expansion(mult = c(0.02, 0.30))
+    ) +
+    scale_color_manual(values = farben_named) +
+    guides(color = "none") +
+    labs(
+      title    = "Cashflow-Schwankungsbreite über Simulationsjahre",
+      subtitle = paste0(
+        "Metrik: ", paste(metric_labels[metric], collapse = " | "),
+        " — ", n_bins, " Klassen pro Eigenschaft"
+      ),
+      x = "Simulationsjahr",
+      y = "Schwankungsbreite (relativ)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      strip.text       = element_text(face = "bold", size = 9),
+      strip.background = element_rect(fill = "#e8f0f7", color = NA),
+      legend.position  = "none",
+      panel.grid.minor = element_blank(),
+      plot.title       = element_text(face = "bold"),
+      plot.subtitle    = element_text(color = "grey40"),
+      panel.spacing    = unit(1.0, "lines")
+    )
+  
+  print(p)
+  invisible(p)
+}
+
+
+# ==============================================================================
+# Verwendungsbeispiele
+# ==============================================================================
+#
+# # Tabelle (pivotiert, alle drei Metriken):
+# result <- cashflow_range_table(df, n_bins = 4)
+# result$table_df          # roher data.frame
+# result$table_gt          # formatiertes gt-Objekt
+#
+# # gt-Tabelle als HTML speichern:
+# gt::gtsave(result$table_gt, "schwankungsbreiten_tabelle.html")
+#
+# # Linienplot mit einer Metrik:
+# cashflow_range_plot(df, metric = "CV")
+#
+# # Linienplot mit allen drei Metriken (Grid):
+# cashflow_range_plot(df, metric = c("CV", "Range_rel", "IQR_rel"))
+#
+# # Andere Klassenzahl oder Palette:
+# cashflow_range_plot(df, metric = "Range_rel", n_bins = 3, palette = "Dark2")
+
+
 
 # ============================================================================
 # ENDE DER FUNKTIONSDATEI

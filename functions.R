@@ -2463,11 +2463,560 @@ cashflow_range_plot <- function(
 # # Andere Klassenzahl oder Palette:
 # cashflow_range_plot(df, metric = "Range_rel", n_bins = 3, palette = "Dark2")
 
+# ==============================================================================
+# cashflow_hypothesis_test()
+# ------------------------------------------------------------------------------
+# Testet für jede der 7 Bestandseigenschaften die Hypothese:
+#
+#   H0: Die Eigenschaft hat KEINEN Einfluss auf die Cashflow-Schwankungsbreite
+#   H1: Die Eigenschaft hat einen Einfluss auf die Cashflow-Schwankungsbreite
+#
+# EINHEIT DER ANALYSE: CV pro Simulationspfad
+#   - CV(Pfad) = SD(cashflow_rent über Jahre) / |Mean(cashflow_rent über Jahre)|
+#   - Dies vermeidet das Autokorrelationsproblem (Jahre innerhalb eines Pfades
+#     sind keine unabhängigen Beobachtungen)
+#   - Jeder Pfad liefert eine unabhängige Beobachtung der Schwankungsbreite
+#
+# TESTS:
+#   1. Kruskal-Wallis-Test (nichtparametrisch, robust gegen Schiefe der CV-Verteilung)
+#   2. Post-hoc Dunn-Test mit Bonferroni-Korrektur (paarweise Gruppenvergleiche)
+#   3. Effektgrösse η² (Eta-Quadrat) = (H - k + 1) / (n - k)
+#
+# EIGENSCHAFTEN (Spalten im df):
+#   bestand_n_total           Bestandsgrösse
+#   bestand_avg_age           Durchschnittsalter
+#   bestand_share_married     Verheiratetenanteil
+#   bestand_spouse_pension_rate Ehegattenrente-Rate
+#   bestand_spouse_age_diff_mean Altersunterschied Ehegatte
+#   pop_share_female          Frauenanteil (Population)
+#   bestand_pension_mean      Rentenhöhe Ø
+#
+# Verwendung:
+#   result <- cashflow_hypothesis_test(df)
+#   result$summary          # Übersichtstabelle aller 7 Tests
+#   result$posthoc          # Named list: Dunn-Tests pro Eigenschaft
+#   result$plots$overview   # Forest-Plot der Effektgrössen
+#   result$plots$boxplots   # Boxplots CV nach Klasse, facettiert
+# ==============================================================================
 
+cashflow_hypothesis_test <- function(
+    df,
+    n_bins          = 4,         # Klassen pro Eigenschaft (für Kruskal-Wallis)
+    alpha           = 0.05,      # Signifikanzniveau
+    p_adjust_method = "bonferroni",  # Korrektur für Post-hoc: "bonferroni", "holm", "BH"
+    min_n_per_group = 10,        # Mindest-Beobachtungen pro Gruppe für validen Test
+    print_results   = TRUE
+) {
+  #' @param df              Data frame mit MC-Pfaden (path_nr, year, cashflow_rent,
+  #'                        plus Bestandseigenschaften)
+  #' @param n_bins          Anzahl Quantilklassen pro Eigenschaft
+  #' @param alpha           Signifikanzniveau (Default: 0.05)
+  #' @param p_adjust_method Methode für Mehrfachtestkorrektur
+  #' @param min_n_per_group Mindest-N pro Gruppe; Gruppen darunter werden gewarnt
+  #' @param print_results   Ergebnisse auf Konsole ausgeben?
+  #' @return Liste: $summary, $posthoc, $plots
+  
+  suppressPackageStartupMessages({
+    library(dplyr)
+    library(tidyr)
+    library(ggplot2)
+    library(scales)
+  })
+  
+  has_dunn   <- requireNamespace("dunn.test",  quietly = TRUE)
+  has_rstatix <- requireNamespace("rstatix",   quietly = TRUE)
+  has_gt     <- requireNamespace("gt",         quietly = TRUE)
+  
+  if (!has_dunn && !has_rstatix) {
+    message(
+      "Hinweis: Kein Post-hoc-Paket gefunden.\n",
+      "  Installiere eines der folgenden:\n",
+      "    install.packages('dunn.test')   # empfohlen\n",
+      "    install.packages('rstatix')     # Alternative\n",
+      "  Kruskal-Wallis-Tests werden trotzdem durchgeführt."
+    )
+  }
+  
+  df <- as.data.frame(df)
+  
+  # ---- Bestandseigenschaften definieren --------------------------------------
+  has_spouse     <- "bestand_spouse_pension_rate"   %in% names(df)
+  has_age_diff   <- "bestand_spouse_age_diff_mean"  %in% names(df)
+  has_pop_female <- "pop_share_female"              %in% names(df)
+  has_pension    <- "bestand_pension_mean"          %in% names(df)
+  
+  properties <- list(
+    list(col = "bestand_n_total",
+         label = "Bestandsgrösse (n)",
+         unit  = "Personen"),
+    list(col = "bestand_avg_age",
+         label = "Durchschnittsalter",
+         unit  = "Jahre"),
+    list(col = "bestand_share_married",
+         label = "Verheiratetenanteil",
+         unit  = "%"),
+    list(col = if (has_spouse) "bestand_spouse_pension_rate" else NULL,
+         label = "Ehegattenrente-Rate",
+         unit  = "% der Rente"),
+    list(col = if (has_age_diff) "bestand_spouse_age_diff_mean"
+         else if ("pop_spouse_age_diff" %in% names(df)) "pop_spouse_age_diff"
+         else NULL,
+         label = "Altersunterschied Ehegatte",
+         unit  = "Jahre"),
+    list(col = if (has_pop_female) "pop_share_female"
+         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+         else NULL,
+         label = "Frauenanteil (Population)",
+         unit  = "%"),
+    list(col = if (has_pension) "bestand_pension_mean" else NULL,
+         label = "Rentenhöhe Ø",
+         unit  = "CHF/Jahr")
+  )
+  # Eigenschaften ohne vorhandene Spalte entfernen
+  properties <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), properties)
+  
+  # ---- Schritt 1: CV pro Simulationspfad berechnen ---------------------------
+  # Aggregation über alle Simulationsjahre: ein CV-Wert pro Pfad
+  # Bestandseigenschaften sind innerhalb eines Pfades konstant → 1. Zeile genügt
+  prop_cols <- unique(sapply(properties, `[[`, "col"))
+  
+  # Pfad-ID: falls globale path_nr nicht vorhanden, source_file + path_nr
+  if (!"path_nr" %in% names(df)) {
+    stop("Spalte 'path_nr' nicht gefunden. Bitte Daten mit load_*() laden.")
+  }
+  # Eindeutigen Pfad-Schlüssel bauen (source_file falls vorhanden)
+  if ("source_file" %in% names(df)) {
+    df <- df %>% mutate(.path_key = paste(source_file, path_nr, sep = "__"))
+  } else {
+    df <- df %>% mutate(.path_key = as.character(path_nr))
+  }
+  
+  # CV pro Pfad: SD(cashflow) / |Mean(cashflow)| über alle Jahre
+  path_cv <- df %>%
+    filter(!is.na(cashflow_rent)) %>%
+    group_by(.path_key) %>%
+    summarise(
+      cf_mean = mean(cashflow_rent,   na.rm = TRUE),
+      cf_sd   = sd(cashflow_rent,     na.rm = TRUE),
+      cv      = cf_sd / abs(cf_mean),
+      n_years = n(),
+      # Bestandseigenschaften: konstant pro Pfad, erste Zeile nehmen
+      across(all_of(prop_cols), ~ first(na.omit(.))),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(cv), is.finite(cv), n_years >= 5)   # mind. 5 Jahre für stabiles CV
+  
+  n_paths_total <- nrow(path_cv)
+  if (n_paths_total < 30) {
+    warning("Nur ", n_paths_total, " Pfade verfügbar. Testergebnisse sind wenig aussagekräftig.")
+  }
+  
+  # ---- Schritt 2: Tests pro Eigenschaft --------------------------------------
+  results_list <- vector("list", length(properties))
+  posthoc_list <- vector("list", length(properties))
+  plot_df_list <- vector("list", length(properties))
+  
+  for (i in seq_along(properties)) {
+    prop  <- properties[[i]]
+    col   <- prop$col
+    label <- prop$label
+    
+    # Klassen bilden (Quantilbins)
+    x_vals <- path_cv[[col]]
+    breaks <- unique(quantile(x_vals, probs = seq(0, 1, length.out = n_bins + 1),
+                              na.rm = TRUE))
+    
+    if (length(breaks) >= 3) {
+      path_cv$.grp <- cut(x_vals, breaks = breaks, include.lowest = TRUE, dig.lab = 4)
+    } else {
+      # Wenige eindeutige Werte → direkte Faktorisierung
+      path_cv$.grp <- factor(round(x_vals, 3))
+    }
+    
+    # Gruppen mit zu wenig Beobachtungen markieren
+    grp_counts <- table(path_cv$.grp)
+    small_grps <- names(grp_counts)[grp_counts < min_n_per_group]
+    if (length(small_grps) > 0) {
+      warning(sprintf(
+        "[%s] %d Gruppe(n) mit < %d Beobachtungen: %s",
+        label, length(small_grps), min_n_per_group,
+        paste(small_grps, collapse = ", ")
+      ))
+    }
+    
+    # Gruppen mit mind. 2 Klassen vorhanden?
+    valid_grps <- names(grp_counts)[grp_counts >= 2]
+    if (length(valid_grps) < 2) {
+      results_list[[i]] <- tibble(
+        Eigenschaft = label, n_pfade = n_paths_total,
+        n_gruppen = length(grp_counts), H_stat = NA, df_kw = NA,
+        p_value = NA, p_adj = NA, eta_sq = NA,
+        signifikant = NA, effekt = "nicht testbar"
+      )
+      next
+    }
+    
+    # ---- Kruskal-Wallis-Test ----
+    kw <- kruskal.test(cv ~ .grp, data = path_cv)
+    
+    # Effektgrösse η²: (H - k + 1) / (n - k)
+    # H = KW-Statistik, k = Anzahl Gruppen, n = Gesamtstichprobe
+    k   <- length(unique(na.omit(path_cv$.grp)))
+    n   <- sum(!is.na(path_cv$.grp) & !is.na(path_cv$cv))
+    eta_sq <- max(0, (kw$statistic - k + 1) / (n - k))
+    
+    # Effektstärke nach Cohen (für H-basiertes η²)
+    effekt_label <- dplyr::case_when(
+      eta_sq < 0.01  ~ "vernachlässigbar",
+      eta_sq < 0.06  ~ "klein",
+      eta_sq < 0.14  ~ "mittel",
+      TRUE           ~ "gross"
+    )
+    
+    results_list[[i]] <- tibble(
+      Eigenschaft = label,
+      Einheit     = prop$unit,
+      n_pfade     = n,
+      n_gruppen   = k,
+      H_stat      = round(kw$statistic, 3),
+      df_kw       = kw$parameter,
+      p_value     = kw$p.value,
+      eta_sq      = round(eta_sq, 4),
+      effekt      = effekt_label,
+      signifikant = kw$p.value < alpha
+    )
+    
+    # ---- Post-hoc Dunn-Test ------------------------------------------------
+    ph <- NULL
+    if (has_rstatix) {
+      ph_raw <- rstatix::dunn_test(
+        path_cv %>% filter(!is.na(.grp), !is.na(cv)),
+        cv ~ .grp,
+        p.adjust.method = p_adjust_method
+      )
+      ph <- ph_raw %>%
+        select(group1, group2, statistic, p, p.adj, p.adj.signif) %>%
+        mutate(Eigenschaft = label)
+    } else if (has_dunn) {
+      ph_raw <- dunn.test::dunn.test(
+        x = path_cv$cv[!is.na(path_cv$.grp) & !is.na(path_cv$cv)],
+        g = path_cv$.grp[!is.na(path_cv$.grp) & !is.na(path_cv$cv)],
+        method = p_adjust_method, alpha = alpha, kw = FALSE, label = TRUE,
+        wrap = FALSE, table = FALSE, list = FALSE, rmc = FALSE, altp = FALSE
+      )
+      ph <- tibble(
+        Eigenschaft = label,
+        group1      = sub(" - .*", "",  ph_raw$comparisons),
+        group2      = sub(".* - ", "",  ph_raw$comparisons),
+        statistic   = round(ph_raw$Z,   3),
+        p           = ph_raw$P,
+        p.adj       = ph_raw$P.adjusted,
+        p.adj.signif = dplyr::case_when(
+          ph_raw$P.adjusted < 0.001 ~ "***",
+          ph_raw$P.adjusted < 0.01  ~ "**",
+          ph_raw$P.adjusted < 0.05  ~ "*",
+          ph_raw$P.adjusted < 0.10  ~ ".",
+          TRUE                       ~ "ns"
+        )
+      )
+    }
+    posthoc_list[[i]] <- ph
+    names(posthoc_list)[i] <- label
+    
+    # ---- Daten für Boxplot-Facet -------------------------------------------
+    plot_df_list[[i]] <- path_cv %>%
+      filter(!is.na(.grp), !is.na(cv)) %>%
+      mutate(Eigenschaft = label,
+             Klasse      = as.character(.grp))
+  }
+  
+  # ---- Schritt 3: Ergebnistabelle zusammenfassen ----------------------------
+  summary_df <- bind_rows(results_list) %>%
+    mutate(
+      p_value_fmt = dplyr::case_when(
+        is.na(p_value)    ~ "—",
+        p_value < 0.001   ~ "< 0.001",
+        p_value < 0.01    ~ sprintf("%.3f", p_value),
+        TRUE              ~ sprintf("%.3f", p_value)
+      ),
+      sig_symbol = dplyr::case_when(
+        is.na(p_value)    ~ "—",
+        p_value < 0.001   ~ "***",
+        p_value < 0.01    ~ "**",
+        p_value < 0.05    ~ "*",
+        p_value < 0.10    ~ ".",
+        TRUE              ~ "ns"
+      )
+    )
+  
+  # ---- Schritt 4: Plots -----------------------------------------------------
+  plots <- list()
+  
+  ## 4a. Forest-Plot: Effektgrösse η² pro Eigenschaft
+  forest_df <- summary_df %>%
+    filter(!is.na(eta_sq)) %>%
+    mutate(
+      Eigenschaft = factor(Eigenschaft, levels = rev(Eigenschaft)),
+      sig_col     = if_else(signifikant, "signifikant (p < .05)", "nicht signifikant")
+    )
+  
+  # Schwellenwert-Linien als separate Daten (kompatibel mit diskreter Y-Achse)
+  vline_df <- data.frame(
+    xintercept = c(0.01, 0.06, 0.14),
+    label      = c("klein", "mittel", "gross")
+  )
+  # Label-Position: oberste Eigenschaft im Faktor (= letzte Zeile = oben im Plot)
+  top_level <- levels(forest_df$Eigenschaft)[length(levels(forest_df$Eigenschaft))]
+  
+  plots$overview <- ggplot(forest_df,
+                           aes(x = eta_sq, y = Eigenschaft, color = sig_col)) +
+    geom_vline(data = vline_df, aes(xintercept = xintercept),
+               linetype = "dashed", color = "grey70", linewidth = 0.4,
+               inherit.aes = FALSE) +
+    geom_label(data = vline_df,
+               aes(x = xintercept, y = top_level, label = label),
+               inherit.aes = FALSE,
+               vjust = -0.4, hjust = -0.05,
+               size = 2.6, color = "grey50",
+               label.size = 0, fill = "white", alpha = 0.8) +
+    geom_segment(aes(x = 0, xend = eta_sq, yend = Eigenschaft),
+                 linewidth = 1.2, alpha = 0.7) +
+    geom_point(aes(size = H_stat), alpha = 0.9) +
+    geom_text(aes(label = paste0(sig_symbol, "  η²=", sprintf("%.3f", eta_sq))),
+              hjust = -0.15, size = 3, color = "grey30") +
+    scale_color_manual(
+      values = c("signifikant (p < .05)" = "#1a6faf", "nicht signifikant" = "#b0b0b0"),
+      name   = NULL
+    ) +
+    scale_size_continuous(name = "KW H-Statistik", range = c(3, 8)) +
+    scale_x_continuous(
+      limits = c(0, max(forest_df$eta_sq, na.rm = TRUE) * 1.5),
+      labels = number_format(accuracy = 0.001),
+      expand = expansion(mult = c(0, 0.05))
+    ) +
+    scale_y_discrete() +
+    labs(
+      title    = "Einfluss der Bestandseigenschaften auf Cashflow-Schwankungsbreite",
+      subtitle = paste0(
+        "Kruskal-Wallis-Test | Effektgrösse η² | n = ", n_paths_total, " Pfade | ",
+        n_bins, " Klassen pro Eigenschaft | α = ", alpha
+      ),
+      x = "Effektgrösse η² (Eta-Quadrat)",
+      y = NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      legend.position    = "bottom",
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      plot.title         = element_text(face = "bold"),
+      plot.subtitle      = element_text(color = "grey40", size = 9)
+    )
+  
+  ## 4b. Boxplots: CV-Verteilung nach Klasse, facettiert nach Eigenschaft
+  plot_df <- bind_rows(plot_df_list)
+  
+  if (nrow(plot_df) > 0) {
+    # Eigenschaft-Reihenfolge nach η² (absteigend)
+    prop_order <- summary_df %>%
+      filter(!is.na(eta_sq)) %>%
+      arrange(desc(eta_sq)) %>%
+      pull(Eigenschaft)
+    
+    plot_df <- plot_df %>%
+      mutate(Eigenschaft = factor(Eigenschaft, levels = prop_order))
+    
+    # p-Wert-Labels für Facet-Titel
+    kw_labels <- summary_df %>%
+      mutate(facet_label = paste0(
+        Eigenschaft, "\n",
+        "KW: H=", sprintf("%.1f", H_stat), ", ",
+        "p", ifelse(p_value < 0.001, "<0.001", paste0("=", sprintf("%.3f", p_value))),
+        " ", sig_symbol, " | η²=", sprintf("%.3f", eta_sq)
+      )) %>%
+      select(Eigenschaft, facet_label)
+    
+    plot_df <- plot_df %>%
+      left_join(kw_labels, by = "Eigenschaft")
+    
+    plots$boxplots <- ggplot(plot_df,
+                             aes(x = Klasse, y = cv, fill = Klasse)) +
+      geom_boxplot(outlier.size = 0.6, outlier.alpha = 0.4,
+                   alpha = 0.75, linewidth = 0.4) +
+      geom_jitter(width = 0.15, size = 0.4, alpha = 0.2, color = "grey30") +
+      facet_wrap(~ facet_label, scales = "free_x", ncol = 4) +
+      scale_y_continuous(labels = percent_format(accuracy = 1)) +
+      scale_fill_brewer(palette = "Set2") +
+      guides(fill = "none") +
+      labs(
+        title    = "Cashflow-CV nach Bestandseigenschaft und Klasse",
+        subtitle = paste0(
+          "CV = SD(cashflow) / |Mean(cashflow)| pro Simulationspfad | ",
+          "Sortiert nach Effektgrösse η² (absteigend)"
+        ),
+        x = "Klasse (Quantilbins der Eigenschaft)",
+        y = "CV (Cashflow-Variationskoeffizient)"
+      ) +
+      theme_minimal(base_size = 10) +
+      theme(
+        strip.text        = element_text(face = "bold", size = 7.5),
+        strip.background  = element_rect(fill = "#e8f0f7", color = NA),
+        axis.text.x       = element_text(angle = 25, hjust = 1, size = 7),
+        panel.grid.minor  = element_blank(),
+        plot.title        = element_text(face = "bold"),
+        plot.subtitle     = element_text(color = "grey40", size = 9)
+      )
+  }
+  
+  # ---- Schritt 5: Konsolen-Ausgabe ------------------------------------------
+  if (print_results) {
+    cat("\n")
+    cat("══════════════════════════════════════════════════════════════════════\n")
+    cat(" HYPOTHESENTEST: Einfluss der Bestandseigenschaften auf Cashflow-CV\n")
+    cat("══════════════════════════════════════════════════════════════════════\n")
+    cat(sprintf(" Test:       Kruskal-Wallis (nichtparametrisch)\n"))
+    cat(sprintf(" Post-hoc:   Dunn-Test (%s-Korrektur)\n", p_adjust_method))
+    cat(sprintf(" n (Pfade):  %d | Klassen: %d | α = %.2f\n\n",
+                n_paths_total, n_bins, alpha))
+    
+    out <- summary_df %>%
+      mutate(
+        `η²`      = sprintf("%.4f", eta_sq),
+        Effekt    = effekt,
+        `H (df)`  = sprintf("%.1f (%d)", H_stat, df_kw),
+        p         = p_value_fmt,
+        Sig       = sig_symbol
+      ) %>%
+      select(Eigenschaft, `n Pfade` = n_pfade, `Gruppen` = n_gruppen,
+             `H (df)`, p, Sig, `η²`, Effekt)
+    
+    print(as.data.frame(out), row.names = FALSE)
+    
+    # Post-hoc Zusammenfassung
+    cat("\n── Post-hoc (Dunn-Test, nur signifikante Paare) ──────────────────────\n")
+    for (nm in names(posthoc_list)) {
+      ph <- posthoc_list[[nm]]
+      if (is.null(ph)) next
+      sig_pairs <- ph %>% filter(p.adj < alpha)
+      if (nrow(sig_pairs) == 0) {
+        cat(sprintf("  %-35s keine sign. Paare\n", nm))
+      } else {
+        cat(sprintf("  %s  (%d sign. Paare von %d):\n", nm, nrow(sig_pairs), nrow(ph)))
+        for (j in seq_len(min(nrow(sig_pairs), 5))) {
+          cat(sprintf("    %s vs %s  →  p.adj=%s %s\n",
+                      sig_pairs$group1[j], sig_pairs$group2[j],
+                      sprintf("%.4f", sig_pairs$p.adj[j]),
+                      sig_pairs$p.adj.signif[j]))
+        }
+        if (nrow(sig_pairs) > 5)
+          cat(sprintf("    ... und %d weitere Paare\n", nrow(sig_pairs) - 5))
+      }
+    }
+    cat("\n Signifikanzcodes: *** p<.001  ** p<.01  * p<.05  . p<.10  ns p≥.10\n")
+    cat(" Effektgrösse η²:  <.01 vernachlässigbar | .01-.06 klein | .06-.14 mittel | >.14 gross\n")
+    cat("══════════════════════════════════════════════════════════════════════\n\n")
+  }
+  
+  # ---- Plots ausgeben -------------------------------------------------------
+  if (!is.null(plots$overview))  print(plots$overview)
+  if (!is.null(plots$boxplots))  print(plots$boxplots)
+  
+  # ---- gt-Tabelle (optional) ------------------------------------------------
+  tbl_gt <- NULL
+  if (has_gt) {
+    library(gt)
+    tbl_gt <- summary_df %>%
+      select(Eigenschaft, Einheit, n_pfade, n_gruppen,
+             H_stat, df_kw, p_value_fmt, sig_symbol, eta_sq, effekt) %>%
+      gt() %>%
+      tab_header(
+        title    = md("**Kruskal-Wallis-Test**: Einfluss auf Cashflow-Schwankungsbreite"),
+        subtitle = md(paste0(
+          "H₀: Eigenschaft hat *keinen* Einfluss auf CV(Cashflow) | ",
+          "n = ", n_paths_total, " Pfade | α = ", alpha
+        ))
+      ) %>%
+      cols_label(
+        Eigenschaft  = "Eigenschaft",
+        Einheit      = "Einheit",
+        n_pfade      = "n Pfade",
+        n_gruppen    = "Gruppen",
+        H_stat       = "H-Statistik",
+        df_kw        = "df",
+        p_value_fmt  = "p-Wert",
+        sig_symbol   = "",
+        eta_sq       = md("η²"),
+        effekt       = "Effekt"
+      ) %>%
+      fmt_number(columns = H_stat, decimals = 2) %>%
+      fmt_number(columns = eta_sq, decimals = 4) %>%
+      data_color(
+        columns = eta_sq,
+        method  = "numeric",
+        palette = c("#f7fbff", "#2171b5"),
+        domain  = c(0, max(summary_df$eta_sq, na.rm = TRUE))
+      ) %>%
+      tab_style(
+        style = cell_text(weight = "bold"),
+        locations = cells_body(
+          columns = sig_symbol,
+          rows    = p_value_fmt != "ns" & !is.na(eta_sq)
+        )
+      ) %>%
+      tab_footnote(
+        footnote = md(
+          "η² < .01 vernachlässigbar | .01–.06 klein | .06–.14 mittel | > .14 gross"
+        )
+      ) %>%
+      tab_footnote(
+        footnote = md(paste0(
+          "Post-hoc: Dunn-Test mit ", p_adjust_method, "-Korrektur. ",
+          "Pakete: dunn.test oder rstatix."
+        ))
+      ) %>%
+      opt_stylize(style = 6, color = "blue") %>%
+      opt_table_font(font = list(google_font("Source Sans Pro"), default_fonts()))
+  }
+  
+  invisible(list(
+    summary   = summary_df,
+    posthoc   = posthoc_list,
+    path_cv   = path_cv,
+    plots     = plots,
+    table_gt  = tbl_gt
+  ))
+}
+
+
+# ==============================================================================
+# Verwendungsbeispiele
+# ==============================================================================
+#
+# # Vollständiger Test mit Default-Einstellungen:
+# result <- cashflow_hypothesis_test(df)
+#
+# # Übersichtstabelle:
+# result$summary
+#
+# # gt-Tabelle als HTML speichern:
+# gt::gtsave(result$table_gt, "hypothesentest.html")
+#
+# # Nur Post-hoc für eine bestimmte Eigenschaft:
+# result$posthoc[["Bestandsgrösse (n)"]]
+#
+# # Plots einzeln aufrufen:
+# result$plots$overview   # Forest-Plot
+# result$plots$boxplots   # Boxplots
+#
+# # Andere Klassenzahl oder strengeres Signifikanzniveau:
+# result <- cashflow_hypothesis_test(df, n_bins = 5, alpha = 0.01)
+#
+# # Holm-Korrektur (weniger konservativ als Bonferroni):
+# result <- cashflow_hypothesis_test(df, p_adjust_method = "holm")
 
 # ============================================================================
 # ENDE DER FUNKTIONSDATEI
 # ============================================================================
-# Letzte Änderung: 2026-02-15
+# Letzte Änderung: 2026-31-05
 # Status: Bereit für OneDrive-Synchronisation
 # ============================================================================

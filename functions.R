@@ -2041,17 +2041,18 @@ run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
 }
 
 # ---- Hilfsfunktion: Schwankungsmetriken pro Gruppe & Jahr -------------------
+# Explizite .data$-Referenz damit dplyr die Spalte in jedem Scope findet
 .compute_metrics <- function(df_grp) {
   df_grp %>%
     summarise(
       n_obs      = n(),
-      cf_mean    = mean(cashflow_rent,                    na.rm = TRUE),
-      cf_median  = median(cashflow_rent,                  na.rm = TRUE),
-      cf_sd      = sd(cashflow_rent,                      na.rm = TRUE),
-      cf_p5      = quantile(cashflow_rent, 0.05,          na.rm = TRUE),
-      cf_p25     = quantile(cashflow_rent, 0.25,          na.rm = TRUE),
-      cf_p75     = quantile(cashflow_rent, 0.75,          na.rm = TRUE),
-      cf_p95     = quantile(cashflow_rent, 0.95,          na.rm = TRUE),
+      cf_mean    = mean(.data[["cashflow_rent"]],           na.rm = TRUE),
+      cf_median  = median(.data[["cashflow_rent"]],         na.rm = TRUE),
+      cf_sd      = sd(.data[["cashflow_rent"]],             na.rm = TRUE),
+      cf_p5      = quantile(.data[["cashflow_rent"]], 0.05, na.rm = TRUE),
+      cf_p25     = quantile(.data[["cashflow_rent"]], 0.25, na.rm = TRUE),
+      cf_p75     = quantile(.data[["cashflow_rent"]], 0.75, na.rm = TRUE),
+      cf_p95     = quantile(.data[["cashflow_rent"]], 0.95, na.rm = TRUE),
       .groups    = "drop"
     ) %>%
     mutate(
@@ -2121,7 +2122,7 @@ cashflow_range_table <- function(
     fmt_fn <- .get_format_fn(col)
     
     df_bin <- df %>%
-      filter(!is.na(.data[[col]]), !is.na(cashflow_rent)) %>%
+      dplyr::filter(!is.na(.data[[col]]), !is.na(.data[["cashflow_rent"]])) %>%
       mutate(Klasse = .make_bins(.data[[col]], n_bins, format_fn = fmt_fn))
     
     # Metriken pro Klasse (über alle Jahre + Pfade)
@@ -2295,7 +2296,7 @@ cashflow_range_plot <- function(
     
     fmt_fn  <- .get_format_fn(col)
     df_bin <- df %>%
-      filter(!is.na(.data[[col]]), !is.na(cashflow_rent), !is.na(year)) %>%
+      dplyr::filter(!is.na(.data[[col]]), !is.na(.data[["cashflow_rent"]]), !is.na(.data[["year"]])) %>%
       mutate(Klasse = as.character(.make_bins(.data[[col]], n_bins, format_fn = fmt_fn)))
     
     df_bin %>%
@@ -2337,7 +2338,7 @@ cashflow_range_plot <- function(
   # ---- Endpunkt-Labels: letzter nicht-NA Wert pro Linie & Facet -------------
   label_data <- plot_data %>%
     group_by(Eigenschaft, Metrik, Klasse) %>%
-    filter(!is.na(Wert)) %>%
+    dplyr::filter(!is.na(Wert)) %>%
     slice_max(year, n = 1) %>%
     ungroup() %>%
     # Vertikalen Versatz berechnen um Überlappungen zu minimieren:
@@ -2462,6 +2463,7 @@ cashflow_range_plot <- function(
 #
 # # Andere Klassenzahl oder Palette:
 # cashflow_range_plot(df, metric = "Range_rel", n_bins = 3, palette = "Dark2")
+
 
 # ==============================================================================
 # cashflow_hypothesis_test()
@@ -2593,18 +2595,18 @@ cashflow_hypothesis_test <- function(
   
   # CV pro Pfad: SD(cashflow) / |Mean(cashflow)| über alle Jahre
   path_cv <- df %>%
-    filter(!is.na(cashflow_rent)) %>%
-    group_by(.path_key) %>%
-    summarise(
-      cf_mean = mean(cashflow_rent,   na.rm = TRUE),
-      cf_sd   = sd(cashflow_rent,     na.rm = TRUE),
+    dplyr::filter(!is.na(.data[["cashflow_rent"]])) %>%
+    dplyr::group_by(.data[[".path_key"]]) %>%
+    dplyr::summarise(
+      cf_mean = mean(.data[["cashflow_rent"]], na.rm = TRUE),
+      cf_sd   = sd(.data[["cashflow_rent"]],   na.rm = TRUE),
       cv      = cf_sd / abs(cf_mean),
       n_years = n(),
       # Bestandseigenschaften: konstant pro Pfad, erste Zeile nehmen
       across(all_of(prop_cols), ~ first(na.omit(.))),
       .groups = "drop"
     ) %>%
-    filter(!is.na(cv), is.finite(cv), n_years >= 5)   # mind. 5 Jahre für stabiles CV
+    dplyr::filter(!is.na(cv), is.finite(cv), n_years >= 5)
   
   n_paths_total <- nrow(path_cv)
   if (n_paths_total < 30) {
@@ -2690,7 +2692,7 @@ cashflow_hypothesis_test <- function(
     ph <- NULL
     if (has_rstatix) {
       ph_raw <- rstatix::dunn_test(
-        path_cv %>% filter(!is.na(.grp), !is.na(cv)),
+        path_cv %>% dplyr::filter(!is.na(.grp), !is.na(cv)),
         cv ~ .grp,
         p.adjust.method = p_adjust_method
       )
@@ -2725,7 +2727,7 @@ cashflow_hypothesis_test <- function(
     
     # ---- Daten für Boxplot-Facet -------------------------------------------
     plot_df_list[[i]] <- path_cv %>%
-      filter(!is.na(.grp), !is.na(cv)) %>%
+      dplyr::filter(!is.na(.grp), !is.na(cv)) %>%
       mutate(Eigenschaft = label,
              Klasse      = as.character(.grp))
   }
@@ -2754,7 +2756,7 @@ cashflow_hypothesis_test <- function(
   
   ## 4a. Forest-Plot: Effektgrösse η² pro Eigenschaft
   forest_df <- summary_df %>%
-    filter(!is.na(eta_sq)) %>%
+    dplyr::filter(!is.na(eta_sq)) %>%
     mutate(
       Eigenschaft = factor(Eigenschaft, levels = rev(Eigenschaft)),
       sig_col     = if_else(signifikant, "signifikant (p < .05)", "nicht signifikant")
@@ -2819,7 +2821,7 @@ cashflow_hypothesis_test <- function(
   if (nrow(plot_df) > 0) {
     # Eigenschaft-Reihenfolge nach η² (absteigend)
     prop_order <- summary_df %>%
-      filter(!is.na(eta_sq)) %>%
+      dplyr::filter(!is.na(eta_sq)) %>%
       arrange(desc(eta_sq)) %>%
       pull(Eigenschaft)
     
@@ -2897,7 +2899,7 @@ cashflow_hypothesis_test <- function(
     for (nm in names(posthoc_list)) {
       ph <- posthoc_list[[nm]]
       if (is.null(ph)) next
-      sig_pairs <- ph %>% filter(p.adj < alpha)
+      sig_pairs <- ph %>% dplyr::filter(p.adj < alpha)
       if (nrow(sig_pairs) == 0) {
         cat(sprintf("  %-35s keine sign. Paare\n", nm))
       } else {

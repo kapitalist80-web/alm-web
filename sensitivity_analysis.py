@@ -7,10 +7,15 @@ Dieses Skript variiert systematisch:
   A) Rentnerbestand-Parameter (Demographie)
      - Durchschnittsalter, Bestandesgrösse, Rentenhöhe
      - Anteil Verheiratete, Ehegattenrente, Altersdifferenz
-  B) Asset-Allokation & Duration-Strategie
-     - Gewichtung GovBonds/CorpBonds/Equities/RealEstate/Alternatives
-     - Duration-Modi (fixed, fixed_reset, liability_matching, cashflow_matching)
-     - Sammelstiftung-Modus
+  B) Asset-Allokation (automatisch aus Bandbreiten)
+     - Benutzer gibt nur min/max pro Asset-Klasse an (z.B. BVV2-Grenzen)
+     - LHS erzeugt automatisch gültige Kombinationen (Summe = 1.0)
+     - Anzahl Allokationen steuerbar via --alloc_samples
+  C) Duration-Strategien (Modi + Bandbreiten)
+     - Benutzer gibt mögliche Modi pro Klasse an (gov, corp, alt)
+     - Bandbreiten für initiale Duration via LHS abgetastet
+     - Anzahl Duration-Stichproben steuerbar via --dur_samples
+  D) Sammelstiftung-Modus
 
 Die Ergebnisse werden als CSV exportiert (eine Datei pro Szenario, plus
 eine Übersichts-CSV mit Risikometriken aller Szenarien) und dienen als
@@ -18,12 +23,13 @@ Datengrundlage für eine systematische Sensitivitätsanalyse in RStudio.
 
 Verwendung:
     python sensitivity_analysis.py --n_paths 200 --t_horizon 40 --output_dir data/sensitivity
-    python sensitivity_analysis.py --n_paths 500 --dry_run          # Nur Szenarien anzeigen
-  python sensitivity_analysis.py --n_paths 200 --lhs_samples 200  # Kompakter Lauf (200 Pop-Varianten)
-  python sensitivity_analysis.py --n_paths 200 --lhs_samples 1000 # Grosse Abdeckung (1000 Varianten)
-    python sensitivity_analysis.py --n_paths 300 --resume 42        # Ab Szenario 42 fortsetzen
-    python sensitivity_analysis.py --n_paths 200 --max_disk_gb 50   # Max. 50 GB Speicher
-    python sensitivity_analysis.py --config scenarios.json          # Eigene Szenario-Datei
+    python sensitivity_analysis.py --n_paths 500 --dry_run              # Nur Szenarien anzeigen
+    python sensitivity_analysis.py --n_paths 200 --lhs_samples 200      # 200 Pop-Varianten
+    python sensitivity_analysis.py --n_paths 200 --alloc_samples 100    # 100 Allokations-Varianten
+    python sensitivity_analysis.py --n_paths 200 --dur_samples 30       # 30 Duration-Varianten
+    python sensitivity_analysis.py --n_paths 300 --resume 42            # Ab Szenario 42 fortsetzen
+    python sensitivity_analysis.py --n_paths 200 --max_disk_gb 50       # Max. 50 GB Speicher
+    python sensitivity_analysis.py --config scenarios.json              # Eigene Szenario-Datei
 """
 
 import numpy as np
@@ -55,23 +61,30 @@ POPULATION_GRID = {
     'share_female':       [0.6, 0.55, 0.5, 0.45, 0.4],                   # Anteil weiblich
 }
 
-# --- B) ASSET ALLOCATION & STRATEGIE ---
-# Jedes Tuple: (GovBonds, CorpBonds, Equities, RealEstate, Alternatives)
-# Summe muss 1.0 ergeben, InterestRate-Gewicht ist immer 0
-ALLOCATION_GRID = [
+# --- B) ASSET ALLOCATION (Bandbreiten, z.B. BVV2-Maximalwerte) ---
+# Pro Asset-Klasse: (min_weight, max_weight)
+# InterestRate-Gewicht ist immer 0 (nicht konfigurierbar)
+# Das Skript generiert automatisch gültige Kombinationen (Summe = 1.0)
+# via LHS-Stichproben, Anzahl gesteuert durch --alloc_samples
+ALLOCATION_BOUNDS = {
+    'gov_bonds':    (0.05, 0.50),   # Staatsanleihen
+    'corp_bonds':   (0.00, 0.30),   # Unternehmensanleihen
+    'equities':     (0.00, 0.50),   # Aktien (Art. 55 BVV2: max 50%)
+    'realestate':   (0.00, 0.30),   # Immobilien (Art. 55 BVV2: max 30%)
+    'alternatives': (0.00, 0.25),   # Alternative Anlagen (Art. 53 BVV2: max 25%)
+}
 
-    # Mit Alternatives / Infrastructure Debt
-
-    (0.35, 0.20, 0.05, 0.15, 0.25),
-
-
-]
-
-# --- C) DURATION-STRATEGIEN ---
-DURATION_GRID = [
-    # (gov_mode, corp_mode, alt_mode, gov_init_dur, corp_init_dur, alt_init_dur)
-    ('fixed',              'fixed',             'fixed',             20.0, 10.0, 30.0),
-]
+# --- C) DURATION-STRATEGIEN (Modi + Bandbreiten für Init-Duration) ---
+# Mögliche Modi pro Klasse (Kartesisches Produkt wird gebildet)
+# Bandbreiten für initiale Duration werden via LHS abgetastet
+DURATION_CONFIG = {
+    'gov_modes':    ['fixed'],                          # z.B. ['fixed', 'liability_matching']
+    'corp_modes':   ['fixed'],                          # z.B. ['fixed', 'cashflow_matching']
+    'alt_modes':    ['fixed'],                          # z.B. ['fixed', 'fixed_reset']
+    'gov_init_dur': (10.0, 25.0),                       # Bandbreite Gov-Bond-Duration
+    'corp_init_dur': (3.0, 15.0),                       # Bandbreite Corp-Bond-Duration
+    'alt_init_dur':  (15.0, 40.0),                      # Bandbreite Alt-Bond-Duration
+}
 
 # --- D) SAMMELSTIFTUNG ---
 SAMMELSTIFTUNG_GRID = [
@@ -237,36 +250,150 @@ def _lhs_sample(param_grid, n_samples, seed=0):
     return samples
 
 
-def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid,
-                        lhs_samples=500, lhs_seed=0):
+def _lhs_allocation_sample(bounds, n_samples, seed=0, max_attempts_factor=20):
+    """
+    Erzeugt n_samples gültige Asset-Allokationen via LHS innerhalb der
+    angegebenen Bandbreiten. Die Gewichte summieren sich immer zu 1.0.
+
+    Vorgehen:
+      1. LHS im 5-dimensionalen Einheitsraum [0,1]^5
+      2. Skalierung auf die jeweiligen Bandbreiten (min, max)
+      3. Normierung auf Summe = 1.0
+      4. Rejection: Nur Samples behalten, deren normierte Gewichte
+         innerhalb der ursprünglichen Bandbreiten liegen
+
+    Args:
+        bounds:  Dict {asset_class: (min_weight, max_weight)}
+        n_samples: Gewünschte Anzahl gültiger Allokationen
+        seed:    Random Seed
+        max_attempts_factor: Faktor für maximale Versuche (n_samples * Faktor)
+
+    Returns:
+        Liste von Tuples (gov, corp, eq, re, alt)
+    """
+    rng = np.random.RandomState(seed)
+    asset_order = ['gov_bonds', 'corp_bonds', 'equities', 'realestate', 'alternatives']
+    mins = np.array([bounds[a][0] for a in asset_order])
+    maxs = np.array([bounds[a][1] for a in asset_order])
+    n_dims = len(asset_order)
+
+    valid = []
+    n_attempts = n_samples * max_attempts_factor
+
+    unit_samples = np.zeros((n_attempts, n_dims))
+    for d in range(n_dims):
+        strata = (np.arange(n_attempts) + rng.uniform(0, 1, n_attempts)) / n_attempts
+        rng.shuffle(strata)
+        unit_samples[:, d] = strata
+
+    raw = mins + unit_samples * (maxs - mins)
+
+    row_sums = raw.sum(axis=1, keepdims=True)
+    normalized = raw / row_sums
+
+    for i in range(n_attempts):
+        w = normalized[i]
+        if np.all(w >= mins - 1e-9) and np.all(w <= maxs + 1e-9):
+            w = np.clip(w, mins, maxs)
+            w = w / w.sum()
+            w_rounded = np.round(w, 6)
+            residual = 1.0 - w_rounded.sum()
+            w_rounded[0] += residual
+            valid.append(tuple(w_rounded))
+            if len(valid) >= n_samples:
+                break
+
+    if len(valid) < n_samples:
+        print(f"  WARNUNG: Nur {len(valid)} von {n_samples} gültigen Allokationen gefunden. "
+              f"Bandbreiten eventuell zu eng.")
+
+    return valid
+
+
+def _lhs_duration_sample(duration_config, n_samples, seed=0):
+    """
+    Erzeugt Duration-Strategien: Kartesisches Produkt der Modi ×
+    LHS-Stichproben für die kontinuierlichen Init-Duration-Bandbreiten.
+
+    Args:
+        duration_config: Dict mit 'gov_modes', 'corp_modes', 'alt_modes',
+                         'gov_init_dur', 'corp_init_dur', 'alt_init_dur'
+        n_samples: Anzahl LHS-Stichproben für Duration-Werte
+        seed: Random Seed
+
+    Returns:
+        Liste von Tuples (gov_mode, corp_mode, alt_mode,
+                          gov_init_dur, corp_init_dur, alt_init_dur)
+    """
+    rng = np.random.RandomState(seed)
+
+    mode_combos = list(itertools.product(
+        duration_config['gov_modes'],
+        duration_config['corp_modes'],
+        duration_config['alt_modes'],
+    ))
+
+    dur_ranges = {
+        'gov': duration_config['gov_init_dur'],
+        'corp': duration_config['corp_init_dur'],
+        'alt': duration_config['alt_init_dur'],
+    }
+    dur_names = ['gov', 'corp', 'alt']
+    n_dims = len(dur_names)
+
+    unit_samples = np.zeros((n_samples, n_dims))
+    for d in range(n_dims):
+        strata = (np.arange(n_samples) + rng.uniform(0, 1, n_samples)) / n_samples
+        rng.shuffle(strata)
+        unit_samples[:, d] = strata
+
+    dur_values = []
+    for i in range(n_samples):
+        vals = []
+        for d, name in enumerate(dur_names):
+            lo, hi = dur_ranges[name]
+            val = lo + unit_samples[i, d] * (hi - lo)
+            vals.append(round(val, 1))
+        dur_values.append(tuple(vals))
+
+    result = []
+    for modes in mode_combos:
+        for durs in dur_values:
+            result.append(modes + durs)
+
+    return result
+
+
+def build_scenario_list(pop_grid, alloc_bounds, duration_config, sammelstiftung_grid,
+                        lhs_samples=500, lhs_seed=0,
+                        alloc_samples=50, alloc_seed=1,
+                        dur_samples=20, dur_seed=2):
     """
     Erzeugt die Szenario-Liste via Latin Hypercube Sampling (LHS).
 
-    Statt OAT (One-At-a-Time, 25 Varianten) oder dem vollen kartesischen
-    Produkt (5x7x3x4x3x4x5 = 25'200 Varianten) deckt LHS den gesamten
-    Parameterraum mit konfigurierbarer Stichprobenzahl gleichmaessig ab:
+    Parameter B (Asset Allocation) und C (Duration) werden automatisch
+    aus Bandbreiten via LHS-Stichproben erzeugt:
 
-      - Der 7-dimensionale Populationsraum wird in n=lhs_samples Punkte
-        aufgeteilt, sodass jede Dimension (Groesse, Alter, Rente, ...)
-        gleichmaessig repraesentiert ist.
-      - Korrelationen zwischen Parametern sind nicht erzwungen – jede
-        Dimension wird unabhaengig permutiert (maximale Diversitaet).
-      - Zusaetzlich wird immer das Basis-Szenario (Referenz) eingefuegt,
-        damit ein bekannter Ankerpunkt vorhanden ist.
-      - Jede Pop-Variante wird mit allen Strategie-Kombinationen
-        (Allokation x Duration x Sammelstiftung) gekreuzt.
+      - Allokation: alloc_samples gueltige Gewichtskombinationen innerhalb
+        der BVV2-konformen Bandbreiten (Summe = 1.0, Rejection Sampling)
+      - Duration: Kartesisches Produkt der Modi x dur_samples LHS-Stichproben
+        fuer die kontinuierlichen Init-Duration-Bandbreiten
 
-    Parameterraum-Abdeckung gegenueber OAT:
-      OAT:  25 Varianten, testet Parameter nur isoliert
-      LHS:  lhs_samples Varianten (Default 500), erfasst Interaktionen
+    Der 7-dimensionale Populationsraum wird in lhs_samples Punkte
+    aufgeteilt. Jede Pop-Variante wird mit allen Strategie-Kombinationen
+    (Allokation x Duration x Sammelstiftung) gekreuzt.
 
     Args:
         pop_grid:            Dict mit diskreten Wertemengen pro Parameter
-        alloc_grid:          Liste von Allokations-Tuples
-        duration_grid:       Liste von Duration-Tuples
+        alloc_bounds:        Dict {asset_class: (min_weight, max_weight)}
+        duration_config:     Dict mit Modi-Listen und Duration-Bandbreiten
         sammelstiftung_grid: Liste von Sammelstiftung-Tuples
-        lhs_samples:         Anzahl LHS-Stichproben (Default: 500)
-        lhs_seed:            Random Seed fuer Reproduzierbarkeit (Default: 0)
+        lhs_samples:         Anzahl LHS-Stichproben fuer Population (Default: 500)
+        lhs_seed:            Random Seed Population (Default: 0)
+        alloc_samples:       Anzahl LHS-Allokationen (Default: 50)
+        alloc_seed:          Random Seed Allokation (Default: 1)
+        dur_samples:         Anzahl LHS-Duration-Stichproben (Default: 20)
+        dur_seed:            Random Seed Duration (Default: 2)
 
     Returns:
         Liste von Szenario-Dicts
@@ -286,11 +413,8 @@ def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid
 
     # ---- LHS-Sampling des Populations-Parameterraums ----------------------
     lhs_variants = _lhs_sample(pop_grid, n_samples=lhs_samples, seed=lhs_seed)
-
-    # Basis-Szenario vorne einfuegen (als Referenz-Ankerpunkt)
     all_variants = [base_pop.copy()] + lhs_variants
 
-    # Deduplizierung (LHS kann gelegentlich denselben Gitterpunkt zweimal treffen)
     unique_pops = []
     seen = set()
     for p in all_variants:
@@ -298,6 +422,16 @@ def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid
         if key not in seen:
             seen.add(key)
             unique_pops.append(p)
+
+    # ---- B) Allokationen via LHS aus Bandbreiten erzeugen ----------------
+    alloc_grid = _lhs_allocation_sample(alloc_bounds, n_samples=alloc_samples, seed=alloc_seed)
+    print(f"  Allokationen generiert: {len(alloc_grid)} (aus Bandbreiten via LHS)")
+
+    # ---- C) Duration-Strategien via LHS aus Bandbreiten erzeugen ---------
+    duration_grid = _lhs_duration_sample(duration_config, n_samples=dur_samples, seed=dur_seed)
+    print(f"  Duration-Strategien generiert: {len(duration_grid)} "
+          f"({len(list(itertools.product(duration_config['gov_modes'], duration_config['corp_modes'], duration_config['alt_modes'])))} "
+          f"Modi-Kombis x {dur_samples} Duration-Stichproben)")
 
     # ---- Kombination: Population x Allokation x Duration x Sammelstiftung ----
     strategy_combos = list(itertools.product(alloc_grid, duration_grid, sammelstiftung_grid))
@@ -667,6 +801,14 @@ Beispiele:
                              '(Default: 500). Gesamtszenarien = lhs_samples x Strategie-Kombinationen.')
     parser.add_argument('--lhs_seed', type=int, default=0,
                         help='Random Seed für LHS-Sampling (Default: 0, für Reproduzierbarkeit)')
+    parser.add_argument('--alloc_samples', type=int, default=50,
+                        help='Anzahl LHS-Allokationen aus Bandbreiten (Default: 50)')
+    parser.add_argument('--alloc_seed', type=int, default=1,
+                        help='Random Seed für Allokations-LHS (Default: 1)')
+    parser.add_argument('--dur_samples', type=int, default=20,
+                        help='Anzahl LHS-Stichproben für Duration-Werte (Default: 20)')
+    parser.add_argument('--dur_seed', type=int, default=2,
+                        help='Random Seed für Duration-LHS (Default: 2)')
 
     args = parser.parse_args()
 
@@ -692,9 +834,13 @@ Beispiele:
                 s['scenario_id'] = i + 1
     else:
         scenarios = build_scenario_list(
-            POPULATION_GRID, ALLOCATION_GRID, DURATION_GRID, SAMMELSTIFTUNG_GRID,
+            POPULATION_GRID, ALLOCATION_BOUNDS, DURATION_CONFIG, SAMMELSTIFTUNG_GRID,
             lhs_samples=args.lhs_samples,
             lhs_seed=args.lhs_seed,
+            alloc_samples=args.alloc_samples,
+            alloc_seed=args.alloc_seed,
+            dur_samples=args.dur_samples,
+            dur_seed=args.dur_seed,
         )
 
     n_total = len(scenarios)

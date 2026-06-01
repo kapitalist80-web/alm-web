@@ -2193,7 +2193,7 @@ run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
 .make_bins <- function(x, n_bins, format_fn = NULL) {
   probs  <- seq(0, 1, length.out = n_bins + 1)
   breaks <- unique(quantile(x, probs = probs, na.rm = TRUE))
-
+  
   if (length(breaks) < 3) {
     # Zu wenige eindeutige Werte → direkte Faktoren mit echten Werten
     vals <- sort(unique(round(x, 3)))
@@ -2202,7 +2202,7 @@ run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
     }
     return(factor(round(x, 3), levels = vals))
   }
-
+  
   # Breaks mit format_fn oder kompakt formatieren
   if (!is.null(format_fn)) {
     # Labels manuell aus formatierten Breaks bauen
@@ -2269,60 +2269,60 @@ cashflow_range_table <- function(
   #' @param n_bins      Anzahl Quantilklassen pro Eigenschaft (Standard: 4)
   #' @param print_table Tabelle auf Konsole ausgeben?
   #' @return Liste: $table_df, $table_gt
-
+  
   suppressPackageStartupMessages({
     library(dplyr); library(tidyr); library(scales)
   })
   has_gt <- requireNamespace("gt", quietly = TRUE)
   if (has_gt) library(gt)
-
+  
   df <- as.data.frame(df)
-
+  
   # Ehegattenrente: direkte Spalte oder Fallback
   has_spouse <- "bestand_spouse_pension_rate" %in% names(df)
-
+  
   # ---- Eigenschaften definieren ----------------------------------------------
   props <- list(
     list(col = "bestand_n_total",          label = "Grösse (n)"),
     list(col = "bestand_avg_age",          label = "Durchschnittsalter"),
     list(col = "bestand_share_married",    label = "Verheiratetenanteil"),
     list(col = if (has_spouse) "bestand_spouse_pension_rate"
-               else            "bestand_share_married",
+         else            "bestand_share_married",
          label = if (has_spouse) "Ehegattenrente-Rate"
-                 else            "Ehegattenrente (Proxy: Verheiratetenanteil)"),
+         else            "Ehegattenrente (Proxy: Verheiratetenanteil)"),
     list(col = if ("bestand_spouse_age_diff_mean" %in% names(df))
-                   "bestand_spouse_age_diff_mean"
-               else if ("pop_spouse_age_diff" %in% names(df))
-                   "pop_spouse_age_diff"
-               else NULL,
-         label = "Altersunterschied Ehegatte"),
+      "bestand_spouse_age_diff_mean"
+      else if ("pop_spouse_age_diff" %in% names(df))
+        "pop_spouse_age_diff"
+      else NULL,
+      label = "Altersunterschied Ehegatte"),
     list(col = if ("pop_share_female" %in% names(df)) "pop_share_female"
-               else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
-               else NULL,
+         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+         else NULL,
          label = "Frauenanteil (Population)"),
     list(col = if ("bestand_pension_mean" %in% names(df)) "bestand_pension_mean"
-               else NULL,
+         else NULL,
          label = "Rentenhöhe Ø (CHF/Jahr)")
   )
   props <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), props)
-
+  
   # ---- Pro Eigenschaft: aggregiere ÜBER ALLE JAHRE --------------------------
   # (Schwankung = Streuung der Cashflows über MC-Pfade, nicht über Zeit)
-
+  
   blocks <- lapply(props, function(p) {
-
+    
     col    <- p$col
     fmt_fn <- .get_format_fn(col)
-
+    
     df_bin <- df %>%
       dplyr::filter(!is.na(.data[[col]]), !is.na(.data[["cashflow_rent"]])) %>%
       mutate(Klasse = .make_bins(.data[[col]], n_bins, format_fn = fmt_fn))
-
+    
     # Metriken pro Klasse (über alle Jahre + Pfade)
     raw <- df_bin %>%
       group_by(Klasse) %>%
       .compute_metrics()
-
+    
     # Pivot: Metriken als Zeilen, Klassen als Spalten
     pivot <- raw %>%
       select(Klasse, CV, Range_rel, IQR_rel) %>%
@@ -2332,19 +2332,19 @@ cashflow_range_table <- function(
       pivot_wider(names_from = Klasse, values_from = Wert) %>%
       mutate(
         Metrik = recode(Metrik,
-          CV        = "CV = SD / |Mean| (%)",
-          Range_rel = "P95-P5 / |Median| (%)",
-          IQR_rel   = "IQR / |Median| (%)"
+                        CV        = "CV = SD / |Mean| (%)",
+                        Range_rel = "P95-P5 / |Median| (%)",
+                        IQR_rel   = "IQR / |Median| (%)"
         ),
         Eigenschaft = p$label
       ) %>%
       select(Eigenschaft, Metrik, everything())
-
+    
     return(pivot)
   })
-
+  
   tbl_df <- bind_rows(blocks)
-
+  
   # ---- Konsolen-Ausgabe ------------------------------------------------------
   if (print_table) {
     cat("\n=== CASHFLOW-SCHWANKUNGSBREITEN NACH BESTANDSEIGENSCHAFTEN ===\n")
@@ -2355,13 +2355,13 @@ cashflow_range_table <- function(
       cat("\n")
     }
   }
-
+  
   # ---- gt-Tabelle ------------------------------------------------------------
   tbl_gt <- NULL
   if (has_gt) {
     # Spalten dynamisch ermitteln (Klassennamen variieren je nach Daten)
     klassen_cols <- setdiff(names(tbl_df), c("Eigenschaft", "Metrik"))
-
+    
     tbl_gt <- tbl_df %>%
       gt(groupname_col = "Eigenschaft", rowname_col = "Metrik") %>%
       tab_header(
@@ -2413,12 +2413,12 @@ cashflow_range_table <- function(
         row_group.background.color = "#e8f0f7",
         stub.font.weight = "bold"
       )
-
+    
     if (print_table) print(tbl_gt)
   } else {
     message("Paket 'gt' nicht installiert → install.packages('gt')")
   }
-
+  
   invisible(list(table_df = tbl_df, table_gt = tbl_gt))
 }
 
@@ -2440,14 +2440,14 @@ cashflow_range_plot <- function(
   #' @param n_bins  Anzahl Klassen pro Eigenschaft
   #' @param palette RColorBrewer-Palette für Linienfarben
   #' @return ggplot-Objekt (unsichtbar)
-
+  
   suppressPackageStartupMessages({
     library(dplyr); library(tidyr); library(ggplot2); library(scales); library(tibble)
   })
-
+  
   df <- as.data.frame(df)
   has_spouse <- "bestand_spouse_pension_rate" %in% names(df)
-
+  
   # Metrik-Labels
   metric_labels <- c(
     CV        = "CV = SD / |Mean|",
@@ -2456,42 +2456,42 @@ cashflow_range_plot <- function(
   )
   metric <- intersect(metric, names(metric_labels))
   if (length(metric) == 0) stop("Ungültige Metrik. Wähle: CV, Range_rel, IQR_rel")
-
+  
   # ---- Eigenschaften ---------------------------------------------------------
   props <- list(
     list(col = "bestand_n_total",            label = "Grösse (n)"),
     list(col = "bestand_avg_age",            label = "Durchschnittsalter"),
     list(col = "bestand_share_married",      label = "Verheiratetenanteil"),
     list(col = if (has_spouse) "bestand_spouse_pension_rate"
-               else            "bestand_share_married",
+         else            "bestand_share_married",
          label = if (has_spouse) "Ehegattenrente-Rate"
-                 else            "Ehegattenrente (Proxy)"),
+         else            "Ehegattenrente (Proxy)"),
     list(col = if ("bestand_spouse_age_diff_mean" %in% names(df))
-                   "bestand_spouse_age_diff_mean"
-               else if ("pop_spouse_age_diff" %in% names(df))
-                   "pop_spouse_age_diff"
-               else NULL,
-         label = "Altersunterschied Ehegatte"),
+      "bestand_spouse_age_diff_mean"
+      else if ("pop_spouse_age_diff" %in% names(df))
+        "pop_spouse_age_diff"
+      else NULL,
+      label = "Altersunterschied Ehegatte"),
     list(col = if ("pop_share_female" %in% names(df)) "pop_share_female"
-               else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
-               else NULL,
+         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+         else NULL,
          label = "Frauenanteil (Population)"),
     list(col = if ("bestand_pension_mean" %in% names(df)) "bestand_pension_mean"
-               else NULL,
+         else NULL,
          label = "Rentenhöhe Ø (CHF/Jahr)")
   )
   # Eigenschaften ohne vorhandene Spalte entfernen
   props <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), props)
-
+  
   # ---- Pro Eigenschaft: Metriken pro Jahr & Klasse ---------------------------
   all_data <- lapply(props, function(p) {
     col <- p$col
-
+    
     fmt_fn  <- .get_format_fn(col)
     df_bin <- df %>%
       dplyr::filter(!is.na(.data[[col]]), !is.na(.data[["cashflow_rent"]]), !is.na(.data[["year"]])) %>%
       mutate(Klasse = as.character(.make_bins(.data[[col]], n_bins, format_fn = fmt_fn)))
-
+    
     df_bin %>%
       group_by(year, Klasse) %>%
       .compute_metrics() %>%
@@ -2502,7 +2502,7 @@ cashflow_range_plot <- function(
       )
   }) %>%
     bind_rows()
-
+  
   # ---- In Long-Format für ggplot ---------------------------------------------
   plot_data <- all_data %>%
     select(Eigenschaft, Klasse, Klasse_rang, year, all_of(metric)) %>%
@@ -2512,7 +2512,7 @@ cashflow_range_plot <- function(
       Metrik_label = metric_labels[Metrik],
       Klasse       = factor(Klasse, levels = unique(Klasse))
     )
-
+  
   # ---- Farbpalette -----------------------------------------------------------
   # Klassen-Labels unterscheiden sich pro Eigenschaft (z.B. "[50,200]" vs "[65,70]").
   # Wir färben nach dem Rang (1 = kleinste Klasse) einheitlich über alle Facets.
@@ -2521,13 +2521,13 @@ cashflow_range_plot <- function(
   } else {
     scales::hue_pal()(n_bins)
   }
-
+  
   farben_named <- plot_data %>%
     distinct(Klasse, Klasse_rang) %>%
     mutate(farbe = basis_farben[pmin(Klasse_rang, length(basis_farben))]) %>%
     select(Klasse, farbe) %>%
     tibble::deframe()
-
+  
   # ---- Endpunkt-Labels: letzter nicht-NA Wert pro Linie & Facet -------------
   label_data <- plot_data %>%
     group_by(Eigenschaft, Metrik, Klasse) %>%
@@ -2551,15 +2551,15 @@ cashflow_range_plot <- function(
       )
     ) %>%
     ungroup()
-
+  
   use_repel <- requireNamespace("ggrepel", quietly = TRUE)
-
+  
   x_max   <- max(plot_data$year, na.rm = TRUE)
   x_break <- sort(unique(c(1, 5, 10, 20, 30, x_max)))
-
+  
   # ---- Plot ------------------------------------------------------------------
   n_metrics <- length(metric)
-
+  
   p <- ggplot(plot_data,
               aes(x = year, y = Wert, color = Klasse, group = Klasse)) +
     geom_line(linewidth = 0.9, alpha = 0.85) +
@@ -2630,7 +2630,7 @@ cashflow_range_plot <- function(
       plot.subtitle    = element_text(color = "grey40"),
       panel.spacing    = unit(1.0, "lines")
     )
-
+  
   print(p)
   invisible(p)
 }
@@ -2656,6 +2656,7 @@ cashflow_range_plot <- function(
 #
 # # Andere Klassenzahl oder Palette:
 # cashflow_range_plot(df, metric = "Range_rel", n_bins = 3, palette = "Dark2")
+
 
 # ==============================================================================
 # cashflow_hypothesis_test()

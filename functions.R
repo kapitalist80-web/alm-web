@@ -1279,7 +1279,200 @@ load_sensitivity_data <- function(data_dir = "data/sensitivity/",
 
   return(dt)
 }
+# ==============================================================================
+# load_sensitivity_lean()
+# ------------------------------------------------------------------------------
+# Schlanke Alternative zu load_sensitivity_data() – lädt nur die Spalten die
+# von cashflow_range_plot() und cashflow_hypothesis_test() benötigt werden.
+#
+# Speichervergleich (100 Mio Zeilen):
+#   load_sensitivity_data()  →  90 Spalten  →  ~64 GB RAM  (+ ~220 GB Peak)
+#   load_sensitivity_lean()  →  13 Spalten  →  ~7.5 GB RAM (+ ~25 GB Peak)
+#
+# Verwendung:
+#   df <- load_sensitivity_lean()                        # Default
+#   df <- load_sensitivity_lean(extra_cols = "deckungsgrad")  # + eigene Spalten
+#   df <- load_sensitivity_lean(as_data_frame = TRUE)    # als data.frame statt data.table
+# ==============================================================================
 
+load_sensitivity_lean <- function(
+    data_dir     = "data/sensitivity/",
+    pattern      = "^sensitivity_scenario_.*\\.csv$",
+    n_cores      = NULL,
+    extra_cols   = NULL,    # character vector: zusätzliche Spalten einlesen
+    as_data_frame = FALSE,  # TRUE: gibt data.frame zurück (für ggplot-Workflows)
+    verbose      = TRUE
+) {
+  #' @param data_dir      Pfad zum Verzeichnis mit den Szenario-CSVs
+  #' @param pattern       Regex-Pattern für die Dateinamen
+  #' @param n_cores       Anzahl CPU-Kerne (NULL = auto: alle - 1)
+  #' @param extra_cols    Zusätzliche Spalten neben den Pflicht-Spalten
+  #' @param as_data_frame Rückgabe als data.frame statt data.table
+  #' @param verbose       Fortschrittsanzeige
+  #' @return data.table (oder data.frame) mit nur den benötigten Spalten
+
+  library(data.table)
+  library(parallel)
+
+  # ---- Pflichtspalten --------------------------------------------------------
+  # Identifikation + Zeitachse
+  id_cols <- c("scenario_id", "path_nr", "year")
+
+  # Zielvariable
+  target_col <- "cashflow_rent"
+
+  # 7 Bestandseigenschaften (für range_plot und hypothesis_test)
+  property_cols <- c(
+    "bestand_n_total",            # Bestandsgrösse
+    "bestand_avg_age",            # Durchschnittsalter
+    "bestand_share_married",      # Verheiratetenanteil
+    "bestand_spouse_pension_rate",# Ehegattenrente-Rate
+    "bestand_spouse_age_diff_mean",# Altersunterschied Ehegatte
+    "pop_share_female",           # Frauenanteil (Population)
+    "bestand_pension_mean"        # Rentenhöhe Ø
+  )
+
+  select_cols <- unique(c(id_cols, target_col, property_cols, extra_cols))
+
+  # ---- Dateien finden --------------------------------------------------------
+  csv_files <- list.files(data_dir, pattern = pattern, full.names = TRUE)
+  if (length(csv_files) == 0) {
+    stop("Keine Sensitivity-CSVs gefunden in: ", data_dir,
+         "\n  Pattern: ", pattern)
+  }
+
+  if (is.null(n_cores)) n_cores <- max(1, detectCores() - 1)
+
+  if (verbose) {
+    cat("=== SENSITIVITY LEAN LOADER ===\n")
+    cat(sprintf("Verzeichnis:   %s\n", data_dir))
+    cat(sprintf("Dateien:       %d\n", length(csv_files)))
+    cat(sprintf("Kerne:         %d\n", n_cores))
+    cat(sprintf("Spalten:       %d  (statt 90)\n", length(select_cols)))
+    cat(sprintf("  %s\n", paste(select_cols, collapse = ", ")))
+  }
+
+  start_time <- Sys.time()
+
+  # ---- Spaltennamen aus erster Datei lesen (für Validierung) ----------------
+  header <- fread(csv_files[1], sep = ";", nrows = 0L)
+  available_cols <- names(header)
+
+  missing_required <- setdiff(c(id_cols, target_col), available_cols)
+  if (length(missing_required) > 0) {
+    stop("Pflicht-Spalten fehlen in den CSVs: ",
+         paste(missing_required, collapse = ", "))
+  }
+
+  missing_props <- setdiff(property_cols, available_cols)
+  if (length(missing_props) > 0) {
+    warning("Folgende Eigenschafts-Spalten fehlen und werden übersprungen:\n  ",
+            paste(missing_props, collapse = ", "))
+  }
+
+  missing_extra <- setdiff(extra_cols, available_cols)
+  if (length(missing_extra) > 0) {
+    warning("Folgende extra_cols fehlen und werden übersprungen:\n  ",
+            paste(missing_extra, collapse = ", "))
+  }
+
+  # Nur Spalten einlesen die tatsächlich vorhanden sind
+  read_cols <- intersect(select_cols, available_cols)
+
+  if (verbose) {
+    cat(sprintf("Laden:         "))
+  }
+
+  # ---- Paralleles Laden (nur select_cols via fread's select-Argument) --------
+  cl <- makeCluster(n_cores)
+  clusterEvalQ(cl, library(data.table))
+  clusterExport(cl, c("read_cols"), envir = environment())
+
+  df_list <- parLapply(cl, csv_files, function(file) {
+    dt <- fread(
+      file,
+      sep          = ";",
+      dec          = ".",
+      select       = read_cols,   # <-- nur nötige Spalten lesen (Kern des Speedups)
+      stringsAsFactors = FALSE,
+      showProgress = FALSE
+    )
+    dt[, source_file := basename(file)]
+    return(dt)
+  })
+
+  stopCluster(cl)
+
+  load_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+  if (verbose) cat(sprintf("%.1f Sek.\n", load_time))
+
+  # ---- Zusammenführen --------------------------------------------------------
+  dt <- rbindlist(df_list, fill = TRUE)
+  rm(df_list); gc(verbose = FALSE)
+
+  # Globale Pfad-ID (scenario_id + path_nr → eindeutiger Pfad)
+  dt[, .path_key := paste(scenario_id, path_nr, sep = "_")]
+  dt[, global_path_nr := .GRP, by = .path_key]
+
+  # ---- Typen sicherstellen ---------------------------------------------------
+  numeric_cols <- c(
+    target_col, property_cols,
+    intersect(extra_cols, available_cols)
+  )
+  for (col in intersect(numeric_cols, names(dt))) {
+    dt[, (col) := as.numeric(get(col))]
+  }
+  if ("year"        %in% names(dt)) dt[, year        := as.integer(year)]
+  if ("scenario_id" %in% names(dt)) dt[, scenario_id := as.integer(scenario_id)]
+  if ("path_nr"     %in% names(dt)) dt[, path_nr     := as.integer(path_nr)]
+
+  # ---- Zusammenfassung -------------------------------------------------------
+  if (verbose) {
+    total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    mem_mb     <- as.numeric(object.size(dt)) / 1024^2
+
+    cat("\n=== ZUSAMMENFASSUNG ===\n")
+    cat(sprintf("Zeilen:            %s\n",   format(nrow(dt),                  big.mark = "'")))
+    cat(sprintf("Szenarien:         %d\n",   uniqueN(dt$scenario_id)))
+    cat(sprintf("Globale Pfade:     %s\n",   format(uniqueN(dt$global_path_nr), big.mark = "'")))
+    cat(sprintf("Spalten geladen:   %d\n",   ncol(dt)))
+    cat(sprintf("Speicher:          %.1f MB  (%.1f GB)\n", mem_mb, mem_mb / 1024))
+    cat(sprintf("Gesamtzeit:        %.1f Sek.\n", total_time))
+    cat(sprintf("Durchsatz:         %s Zeilen/Sek.\n",
+                format(round(nrow(dt) / total_time), big.mark = "'")))
+
+    # Verfügbarkeit der Eigenschafts-Spalten
+    cat("\nEigenschafts-Spalten:\n")
+    for (col in property_cols) {
+      ok  <- col %in% names(dt)
+      pct <- if (ok) 100 * mean(!is.na(dt[[col]])) else 0
+      cat(sprintf("  %s %-35s  %s\n",
+                  if (ok) "✓" else "✗", col,
+                  if (ok) sprintf("%.1f%% non-NA", pct) else "FEHLT"))
+    }
+  }
+
+  if (as_data_frame) return(as.data.frame(dt))
+  return(dt)
+}
+
+
+# ==============================================================================
+# Verwendungsbeispiele
+# ==============================================================================
+#
+# # Standard-Import für range_plot und hypothesis_test:
+# df <- load_sensitivity_lean()
+#
+# # Mit zusätzlicher Spalte (z.B. für Deckungsgrad-Analyse):
+# df <- load_sensitivity_lean(extra_cols = c("deckungsgrad", "V_t"))
+#
+# # Als data.frame (für dplyr/ggplot ohne data.table):
+# df <- load_sensitivity_lean(as_data_frame = TRUE)
+#
+# # Direkt weiterverwenden:
+# cashflow_range_plot(df, metric = "CV")
+# result <- cashflow_hypothesis_test(df)
 
 load_sensitivity_summary <- function(data_dir = "data/sensitivity/",
                                      filename = "sensitivity_summary.csv") {
@@ -2000,7 +2193,7 @@ run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
 .make_bins <- function(x, n_bins, format_fn = NULL) {
   probs  <- seq(0, 1, length.out = n_bins + 1)
   breaks <- unique(quantile(x, probs = probs, na.rm = TRUE))
-  
+
   if (length(breaks) < 3) {
     # Zu wenige eindeutige Werte → direkte Faktoren mit echten Werten
     vals <- sort(unique(round(x, 3)))
@@ -2009,7 +2202,7 @@ run_sensitivity_analysis <- function(data_dir = "data/sensitivity/",
     }
     return(factor(round(x, 3), levels = vals))
   }
-  
+
   # Breaks mit format_fn oder kompakt formatieren
   if (!is.null(format_fn)) {
     # Labels manuell aus formatierten Breaks bauen
@@ -2076,60 +2269,60 @@ cashflow_range_table <- function(
   #' @param n_bins      Anzahl Quantilklassen pro Eigenschaft (Standard: 4)
   #' @param print_table Tabelle auf Konsole ausgeben?
   #' @return Liste: $table_df, $table_gt
-  
+
   suppressPackageStartupMessages({
     library(dplyr); library(tidyr); library(scales)
   })
   has_gt <- requireNamespace("gt", quietly = TRUE)
   if (has_gt) library(gt)
-  
+
   df <- as.data.frame(df)
-  
+
   # Ehegattenrente: direkte Spalte oder Fallback
   has_spouse <- "bestand_spouse_pension_rate" %in% names(df)
-  
+
   # ---- Eigenschaften definieren ----------------------------------------------
   props <- list(
     list(col = "bestand_n_total",          label = "Grösse (n)"),
     list(col = "bestand_avg_age",          label = "Durchschnittsalter"),
     list(col = "bestand_share_married",    label = "Verheiratetenanteil"),
     list(col = if (has_spouse) "bestand_spouse_pension_rate"
-         else            "bestand_share_married",
+               else            "bestand_share_married",
          label = if (has_spouse) "Ehegattenrente-Rate"
-         else            "Ehegattenrente (Proxy: Verheiratetenanteil)"),
+                 else            "Ehegattenrente (Proxy: Verheiratetenanteil)"),
     list(col = if ("bestand_spouse_age_diff_mean" %in% names(df))
-      "bestand_spouse_age_diff_mean"
-      else if ("pop_spouse_age_diff" %in% names(df))
-        "pop_spouse_age_diff"
-      else NULL,
-      label = "Altersunterschied Ehegatte"),
+                   "bestand_spouse_age_diff_mean"
+               else if ("pop_spouse_age_diff" %in% names(df))
+                   "pop_spouse_age_diff"
+               else NULL,
+         label = "Altersunterschied Ehegatte"),
     list(col = if ("pop_share_female" %in% names(df)) "pop_share_female"
-         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
-         else NULL,
+               else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+               else NULL,
          label = "Frauenanteil (Population)"),
     list(col = if ("bestand_pension_mean" %in% names(df)) "bestand_pension_mean"
-         else NULL,
+               else NULL,
          label = "Rentenhöhe Ø (CHF/Jahr)")
   )
   props <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), props)
-  
+
   # ---- Pro Eigenschaft: aggregiere ÜBER ALLE JAHRE --------------------------
   # (Schwankung = Streuung der Cashflows über MC-Pfade, nicht über Zeit)
-  
+
   blocks <- lapply(props, function(p) {
-    
+
     col    <- p$col
     fmt_fn <- .get_format_fn(col)
-    
+
     df_bin <- df %>%
       dplyr::filter(!is.na(.data[[col]]), !is.na(.data[["cashflow_rent"]])) %>%
       mutate(Klasse = .make_bins(.data[[col]], n_bins, format_fn = fmt_fn))
-    
+
     # Metriken pro Klasse (über alle Jahre + Pfade)
     raw <- df_bin %>%
       group_by(Klasse) %>%
       .compute_metrics()
-    
+
     # Pivot: Metriken als Zeilen, Klassen als Spalten
     pivot <- raw %>%
       select(Klasse, CV, Range_rel, IQR_rel) %>%
@@ -2139,19 +2332,19 @@ cashflow_range_table <- function(
       pivot_wider(names_from = Klasse, values_from = Wert) %>%
       mutate(
         Metrik = recode(Metrik,
-                        CV        = "CV = SD / |Mean| (%)",
-                        Range_rel = "P95-P5 / |Median| (%)",
-                        IQR_rel   = "IQR / |Median| (%)"
+          CV        = "CV = SD / |Mean| (%)",
+          Range_rel = "P95-P5 / |Median| (%)",
+          IQR_rel   = "IQR / |Median| (%)"
         ),
         Eigenschaft = p$label
       ) %>%
       select(Eigenschaft, Metrik, everything())
-    
+
     return(pivot)
   })
-  
+
   tbl_df <- bind_rows(blocks)
-  
+
   # ---- Konsolen-Ausgabe ------------------------------------------------------
   if (print_table) {
     cat("\n=== CASHFLOW-SCHWANKUNGSBREITEN NACH BESTANDSEIGENSCHAFTEN ===\n")
@@ -2162,13 +2355,13 @@ cashflow_range_table <- function(
       cat("\n")
     }
   }
-  
+
   # ---- gt-Tabelle ------------------------------------------------------------
   tbl_gt <- NULL
   if (has_gt) {
     # Spalten dynamisch ermitteln (Klassennamen variieren je nach Daten)
     klassen_cols <- setdiff(names(tbl_df), c("Eigenschaft", "Metrik"))
-    
+
     tbl_gt <- tbl_df %>%
       gt(groupname_col = "Eigenschaft", rowname_col = "Metrik") %>%
       tab_header(
@@ -2220,12 +2413,12 @@ cashflow_range_table <- function(
         row_group.background.color = "#e8f0f7",
         stub.font.weight = "bold"
       )
-    
+
     if (print_table) print(tbl_gt)
   } else {
     message("Paket 'gt' nicht installiert → install.packages('gt')")
   }
-  
+
   invisible(list(table_df = tbl_df, table_gt = tbl_gt))
 }
 
@@ -2247,14 +2440,14 @@ cashflow_range_plot <- function(
   #' @param n_bins  Anzahl Klassen pro Eigenschaft
   #' @param palette RColorBrewer-Palette für Linienfarben
   #' @return ggplot-Objekt (unsichtbar)
-  
+
   suppressPackageStartupMessages({
     library(dplyr); library(tidyr); library(ggplot2); library(scales); library(tibble)
   })
-  
+
   df <- as.data.frame(df)
   has_spouse <- "bestand_spouse_pension_rate" %in% names(df)
-  
+
   # Metrik-Labels
   metric_labels <- c(
     CV        = "CV = SD / |Mean|",
@@ -2263,42 +2456,42 @@ cashflow_range_plot <- function(
   )
   metric <- intersect(metric, names(metric_labels))
   if (length(metric) == 0) stop("Ungültige Metrik. Wähle: CV, Range_rel, IQR_rel")
-  
+
   # ---- Eigenschaften ---------------------------------------------------------
   props <- list(
     list(col = "bestand_n_total",            label = "Grösse (n)"),
     list(col = "bestand_avg_age",            label = "Durchschnittsalter"),
     list(col = "bestand_share_married",      label = "Verheiratetenanteil"),
     list(col = if (has_spouse) "bestand_spouse_pension_rate"
-         else            "bestand_share_married",
+               else            "bestand_share_married",
          label = if (has_spouse) "Ehegattenrente-Rate"
-         else            "Ehegattenrente (Proxy)"),
+                 else            "Ehegattenrente (Proxy)"),
     list(col = if ("bestand_spouse_age_diff_mean" %in% names(df))
-      "bestand_spouse_age_diff_mean"
-      else if ("pop_spouse_age_diff" %in% names(df))
-        "pop_spouse_age_diff"
-      else NULL,
-      label = "Altersunterschied Ehegatte"),
+                   "bestand_spouse_age_diff_mean"
+               else if ("pop_spouse_age_diff" %in% names(df))
+                   "pop_spouse_age_diff"
+               else NULL,
+         label = "Altersunterschied Ehegatte"),
     list(col = if ("pop_share_female" %in% names(df)) "pop_share_female"
-         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
-         else NULL,
+               else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+               else NULL,
          label = "Frauenanteil (Population)"),
     list(col = if ("bestand_pension_mean" %in% names(df)) "bestand_pension_mean"
-         else NULL,
+               else NULL,
          label = "Rentenhöhe Ø (CHF/Jahr)")
   )
   # Eigenschaften ohne vorhandene Spalte entfernen
   props <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), props)
-  
+
   # ---- Pro Eigenschaft: Metriken pro Jahr & Klasse ---------------------------
   all_data <- lapply(props, function(p) {
     col <- p$col
-    
+
     fmt_fn  <- .get_format_fn(col)
     df_bin <- df %>%
       dplyr::filter(!is.na(.data[[col]]), !is.na(.data[["cashflow_rent"]]), !is.na(.data[["year"]])) %>%
       mutate(Klasse = as.character(.make_bins(.data[[col]], n_bins, format_fn = fmt_fn)))
-    
+
     df_bin %>%
       group_by(year, Klasse) %>%
       .compute_metrics() %>%
@@ -2309,7 +2502,7 @@ cashflow_range_plot <- function(
       )
   }) %>%
     bind_rows()
-  
+
   # ---- In Long-Format für ggplot ---------------------------------------------
   plot_data <- all_data %>%
     select(Eigenschaft, Klasse, Klasse_rang, year, all_of(metric)) %>%
@@ -2319,22 +2512,22 @@ cashflow_range_plot <- function(
       Metrik_label = metric_labels[Metrik],
       Klasse       = factor(Klasse, levels = unique(Klasse))
     )
-  
+
   # ---- Farbpalette -----------------------------------------------------------
   # Klassen-Labels unterscheiden sich pro Eigenschaft (z.B. "[50,200]" vs "[65,70]").
   # Wir färben nach dem Rang (1 = kleinste Klasse) einheitlich über alle Facets.
   basis_farben <- if (requireNamespace("RColorBrewer", quietly = TRUE)) {
-    RColorBrewer::brewer.pal(max(3, n_bins), palette)[seq_len(n_bins)]
+    RColorBrewer::brewer.pal(min(8, max(3, n_bins)), palette)[seq_len(min(n_bins, 8))]
   } else {
     scales::hue_pal()(n_bins)
   }
-  
+
   farben_named <- plot_data %>%
     distinct(Klasse, Klasse_rang) %>%
     mutate(farbe = basis_farben[pmin(Klasse_rang, length(basis_farben))]) %>%
     select(Klasse, farbe) %>%
     tibble::deframe()
-  
+
   # ---- Endpunkt-Labels: letzter nicht-NA Wert pro Linie & Facet -------------
   label_data <- plot_data %>%
     group_by(Eigenschaft, Metrik, Klasse) %>%
@@ -2358,15 +2551,15 @@ cashflow_range_plot <- function(
       )
     ) %>%
     ungroup()
-  
+
   use_repel <- requireNamespace("ggrepel", quietly = TRUE)
-  
+
   x_max   <- max(plot_data$year, na.rm = TRUE)
   x_break <- sort(unique(c(1, 5, 10, 20, 30, x_max)))
-  
+
   # ---- Plot ------------------------------------------------------------------
   n_metrics <- length(metric)
-  
+
   p <- ggplot(plot_data,
               aes(x = year, y = Wert, color = Klasse, group = Klasse)) +
     geom_line(linewidth = 0.9, alpha = 0.85) +
@@ -2437,7 +2630,7 @@ cashflow_range_plot <- function(
       plot.subtitle    = element_text(color = "grey40"),
       panel.spacing    = unit(1.0, "lines")
     )
-  
+
   print(p)
   invisible(p)
 }
@@ -2463,7 +2656,6 @@ cashflow_range_plot <- function(
 #
 # # Andere Klassenzahl oder Palette:
 # cashflow_range_plot(df, metric = "Range_rel", n_bins = 3, palette = "Dark2")
-
 
 # ==============================================================================
 # cashflow_hypothesis_test()
@@ -2517,18 +2709,18 @@ cashflow_hypothesis_test <- function(
   #' @param min_n_per_group Mindest-N pro Gruppe; Gruppen darunter werden gewarnt
   #' @param print_results   Ergebnisse auf Konsole ausgeben?
   #' @return Liste: $summary, $posthoc, $plots
-  
+
   suppressPackageStartupMessages({
     library(dplyr)
     library(tidyr)
     library(ggplot2)
     library(scales)
   })
-  
+
   has_dunn   <- requireNamespace("dunn.test",  quietly = TRUE)
   has_rstatix <- requireNamespace("rstatix",   quietly = TRUE)
   has_gt     <- requireNamespace("gt",         quietly = TRUE)
-  
+
   if (!has_dunn && !has_rstatix) {
     message(
       "Hinweis: Kein Post-hoc-Paket gefunden.\n",
@@ -2538,15 +2730,15 @@ cashflow_hypothesis_test <- function(
       "  Kruskal-Wallis-Tests werden trotzdem durchgeführt."
     )
   }
-  
+
   df <- as.data.frame(df)
-  
+
   # ---- Bestandseigenschaften definieren --------------------------------------
   has_spouse     <- "bestand_spouse_pension_rate"   %in% names(df)
   has_age_diff   <- "bestand_spouse_age_diff_mean"  %in% names(df)
   has_pop_female <- "pop_share_female"              %in% names(df)
   has_pension    <- "bestand_pension_mean"          %in% names(df)
-  
+
   properties <- list(
     list(col = "bestand_n_total",
          label = "Bestandsgrösse (n)",
@@ -2561,13 +2753,13 @@ cashflow_hypothesis_test <- function(
          label = "Ehegattenrente-Rate",
          unit  = "% der Rente"),
     list(col = if (has_age_diff) "bestand_spouse_age_diff_mean"
-         else if ("pop_spouse_age_diff" %in% names(df)) "pop_spouse_age_diff"
-         else NULL,
+               else if ("pop_spouse_age_diff" %in% names(df)) "pop_spouse_age_diff"
+               else NULL,
          label = "Altersunterschied Ehegatte",
          unit  = "Jahre"),
     list(col = if (has_pop_female) "pop_share_female"
-         else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
-         else NULL,
+               else if ("bestand_share_f" %in% names(df)) "bestand_share_f"
+               else NULL,
          label = "Frauenanteil (Population)",
          unit  = "%"),
     list(col = if (has_pension) "bestand_pension_mean" else NULL,
@@ -2576,12 +2768,12 @@ cashflow_hypothesis_test <- function(
   )
   # Eigenschaften ohne vorhandene Spalte entfernen
   properties <- Filter(function(p) !is.null(p$col) && p$col %in% names(df), properties)
-  
+
   # ---- Schritt 1: CV pro Simulationspfad berechnen ---------------------------
   # Aggregation über alle Simulationsjahre: ein CV-Wert pro Pfad
   # Bestandseigenschaften sind innerhalb eines Pfades konstant → 1. Zeile genügt
   prop_cols <- unique(sapply(properties, `[[`, "col"))
-  
+
   # Pfad-ID: falls globale path_nr nicht vorhanden, source_file + path_nr
   if (!"path_nr" %in% names(df)) {
     stop("Spalte 'path_nr' nicht gefunden. Bitte Daten mit load_*() laden.")
@@ -2592,7 +2784,7 @@ cashflow_hypothesis_test <- function(
   } else {
     df <- df %>% mutate(.path_key = as.character(path_nr))
   }
-  
+
   # CV pro Pfad: SD(cashflow) / |Mean(cashflow)| über alle Jahre
   path_cv <- df %>%
     dplyr::filter(!is.na(.data[["cashflow_rent"]])) %>%
@@ -2607,34 +2799,34 @@ cashflow_hypothesis_test <- function(
       .groups = "drop"
     ) %>%
     dplyr::filter(!is.na(cv), is.finite(cv), n_years >= 5)
-  
+
   n_paths_total <- nrow(path_cv)
   if (n_paths_total < 30) {
     warning("Nur ", n_paths_total, " Pfade verfügbar. Testergebnisse sind wenig aussagekräftig.")
   }
-  
+
   # ---- Schritt 2: Tests pro Eigenschaft --------------------------------------
   results_list <- vector("list", length(properties))
   posthoc_list <- vector("list", length(properties))
   plot_df_list <- vector("list", length(properties))
-  
+
   for (i in seq_along(properties)) {
     prop  <- properties[[i]]
     col   <- prop$col
     label <- prop$label
-    
+
     # Klassen bilden (Quantilbins)
     x_vals <- path_cv[[col]]
     breaks <- unique(quantile(x_vals, probs = seq(0, 1, length.out = n_bins + 1),
                               na.rm = TRUE))
-    
+
     if (length(breaks) >= 3) {
       path_cv$.grp <- cut(x_vals, breaks = breaks, include.lowest = TRUE, dig.lab = 4)
     } else {
       # Wenige eindeutige Werte → direkte Faktorisierung
       path_cv$.grp <- factor(round(x_vals, 3))
     }
-    
+
     # Gruppen mit zu wenig Beobachtungen markieren
     grp_counts <- table(path_cv$.grp)
     small_grps <- names(grp_counts)[grp_counts < min_n_per_group]
@@ -2645,7 +2837,7 @@ cashflow_hypothesis_test <- function(
         paste(small_grps, collapse = ", ")
       ))
     }
-    
+
     # Gruppen mit mind. 2 Klassen vorhanden?
     valid_grps <- names(grp_counts)[grp_counts >= 2]
     if (length(valid_grps) < 2) {
@@ -2657,16 +2849,16 @@ cashflow_hypothesis_test <- function(
       )
       next
     }
-    
+
     # ---- Kruskal-Wallis-Test ----
     kw <- kruskal.test(cv ~ .grp, data = path_cv)
-    
+
     # Effektgrösse η²: (H - k + 1) / (n - k)
     # H = KW-Statistik, k = Anzahl Gruppen, n = Gesamtstichprobe
     k   <- length(unique(na.omit(path_cv$.grp)))
     n   <- sum(!is.na(path_cv$.grp) & !is.na(path_cv$cv))
     eta_sq <- max(0, (kw$statistic - k + 1) / (n - k))
-    
+
     # Effektstärke nach Cohen (für H-basiertes η²)
     effekt_label <- dplyr::case_when(
       eta_sq < 0.01  ~ "vernachlässigbar",
@@ -2674,7 +2866,7 @@ cashflow_hypothesis_test <- function(
       eta_sq < 0.14  ~ "mittel",
       TRUE           ~ "gross"
     )
-    
+
     results_list[[i]] <- tibble(
       Eigenschaft = label,
       Einheit     = prop$unit,
@@ -2687,7 +2879,7 @@ cashflow_hypothesis_test <- function(
       effekt      = effekt_label,
       signifikant = kw$p.value < alpha
     )
-    
+
     # ---- Post-hoc Dunn-Test ------------------------------------------------
     ph <- NULL
     if (has_rstatix) {
@@ -2724,14 +2916,14 @@ cashflow_hypothesis_test <- function(
     }
     posthoc_list[[i]] <- ph
     names(posthoc_list)[i] <- label
-    
+
     # ---- Daten für Boxplot-Facet -------------------------------------------
     plot_df_list[[i]] <- path_cv %>%
       dplyr::filter(!is.na(.grp), !is.na(cv)) %>%
       mutate(Eigenschaft = label,
              Klasse      = as.character(.grp))
   }
-  
+
   # ---- Schritt 3: Ergebnistabelle zusammenfassen ----------------------------
   summary_df <- bind_rows(results_list) %>%
     mutate(
@@ -2750,10 +2942,10 @@ cashflow_hypothesis_test <- function(
         TRUE              ~ "ns"
       )
     )
-  
+
   # ---- Schritt 4: Plots -----------------------------------------------------
   plots <- list()
-  
+
   ## 4a. Forest-Plot: Effektgrösse η² pro Eigenschaft
   forest_df <- summary_df %>%
     dplyr::filter(!is.na(eta_sq)) %>%
@@ -2761,7 +2953,7 @@ cashflow_hypothesis_test <- function(
       Eigenschaft = factor(Eigenschaft, levels = rev(Eigenschaft)),
       sig_col     = if_else(signifikant, "signifikant (p < .05)", "nicht signifikant")
     )
-  
+
   # Schwellenwert-Linien als separate Daten (kompatibel mit diskreter Y-Achse)
   vline_df <- data.frame(
     xintercept = c(0.01, 0.06, 0.14),
@@ -2769,7 +2961,7 @@ cashflow_hypothesis_test <- function(
   )
   # Label-Position: oberste Eigenschaft im Faktor (= letzte Zeile = oben im Plot)
   top_level <- levels(forest_df$Eigenschaft)[length(levels(forest_df$Eigenschaft))]
-  
+
   plots$overview <- ggplot(forest_df,
                            aes(x = eta_sq, y = Eigenschaft, color = sig_col)) +
     geom_vline(data = vline_df, aes(xintercept = xintercept),
@@ -2780,7 +2972,7 @@ cashflow_hypothesis_test <- function(
                inherit.aes = FALSE,
                vjust = -0.4, hjust = -0.05,
                size = 2.6, color = "grey50",
-               label.size = 0, fill = "white", alpha = 0.8) +
+               linewidth = 0, fill = "white", alpha = 0.8) +
     geom_segment(aes(x = 0, xend = eta_sq, yend = Eigenschaft),
                  linewidth = 1.2, alpha = 0.7) +
     geom_point(aes(size = H_stat), alpha = 0.9) +
@@ -2814,20 +3006,20 @@ cashflow_hypothesis_test <- function(
       plot.title         = element_text(face = "bold"),
       plot.subtitle      = element_text(color = "grey40", size = 9)
     )
-  
+
   ## 4b. Boxplots: CV-Verteilung nach Klasse, facettiert nach Eigenschaft
   plot_df <- bind_rows(plot_df_list)
-  
+
   if (nrow(plot_df) > 0) {
     # Eigenschaft-Reihenfolge nach η² (absteigend)
     prop_order <- summary_df %>%
       dplyr::filter(!is.na(eta_sq)) %>%
       arrange(desc(eta_sq)) %>%
       pull(Eigenschaft)
-    
+
     plot_df <- plot_df %>%
       mutate(Eigenschaft = factor(Eigenschaft, levels = prop_order))
-    
+
     # p-Wert-Labels für Facet-Titel
     kw_labels <- summary_df %>%
       mutate(facet_label = paste0(
@@ -2837,10 +3029,24 @@ cashflow_hypothesis_test <- function(
         " ", sig_symbol, " | η²=", sprintf("%.3f", eta_sq)
       )) %>%
       select(Eigenschaft, facet_label)
-    
+
     plot_df <- plot_df %>%
-      left_join(kw_labels, by = "Eigenschaft")
-    
+      left_join(kw_labels, by = "Eigenschaft") %>%
+      # Rang (1 = kleinste Klasse) innerhalb jeder Eigenschaft bestimmen –
+      # gleicher Rang = gleiche Farbe über alle Facets, nur n_bins Farben nötig
+      dplyr::group_by(Eigenschaft) %>%
+      dplyr::mutate(
+        Klasse_rang = as.integer(factor(Klasse, levels = sort(unique(Klasse))))
+      ) %>%
+      dplyr::ungroup()
+
+    # Farbpalette: genau n_bins Farben, nach Rang vergeben
+    basis_farben_bp <- RColorBrewer::brewer.pal(min(8, max(3, n_bins)), "Set2")[seq_len(min(n_bins, 8))]
+    rang_farben_bp  <- plot_df %>%
+      dplyr::distinct(Klasse, Klasse_rang) %>%
+      dplyr::mutate(farbe = basis_farben_bp[pmin(Klasse_rang, length(basis_farben_bp))]) %>%
+      tibble::deframe()
+
     plots$boxplots <- ggplot(plot_df,
                              aes(x = Klasse, y = cv, fill = Klasse)) +
       geom_boxplot(outlier.size = 0.6, outlier.alpha = 0.4,
@@ -2848,7 +3054,7 @@ cashflow_hypothesis_test <- function(
       geom_jitter(width = 0.15, size = 0.4, alpha = 0.2, color = "grey30") +
       facet_wrap(~ facet_label, scales = "free_x", ncol = 4) +
       scale_y_continuous(labels = percent_format(accuracy = 1)) +
-      scale_fill_brewer(palette = "Set2") +
+      scale_fill_manual(values = rang_farben_bp) +
       guides(fill = "none") +
       labs(
         title    = "Cashflow-CV nach Bestandseigenschaft und Klasse",
@@ -2869,7 +3075,7 @@ cashflow_hypothesis_test <- function(
         plot.subtitle     = element_text(color = "grey40", size = 9)
       )
   }
-  
+
   # ---- Schritt 5: Konsolen-Ausgabe ------------------------------------------
   if (print_results) {
     cat("\n")
@@ -2880,7 +3086,7 @@ cashflow_hypothesis_test <- function(
     cat(sprintf(" Post-hoc:   Dunn-Test (%s-Korrektur)\n", p_adjust_method))
     cat(sprintf(" n (Pfade):  %d | Klassen: %d | α = %.2f\n\n",
                 n_paths_total, n_bins, alpha))
-    
+
     out <- summary_df %>%
       mutate(
         `η²`      = sprintf("%.4f", eta_sq),
@@ -2891,9 +3097,9 @@ cashflow_hypothesis_test <- function(
       ) %>%
       select(Eigenschaft, `n Pfade` = n_pfade, `Gruppen` = n_gruppen,
              `H (df)`, p, Sig, `η²`, Effekt)
-    
+
     print(as.data.frame(out), row.names = FALSE)
-    
+
     # Post-hoc Zusammenfassung
     cat("\n── Post-hoc (Dunn-Test, nur signifikante Paare) ──────────────────────\n")
     for (nm in names(posthoc_list)) {
@@ -2918,11 +3124,11 @@ cashflow_hypothesis_test <- function(
     cat(" Effektgrösse η²:  <.01 vernachlässigbar | .01-.06 klein | .06-.14 mittel | >.14 gross\n")
     cat("══════════════════════════════════════════════════════════════════════\n\n")
   }
-  
+
   # ---- Plots ausgeben -------------------------------------------------------
   if (!is.null(plots$overview))  print(plots$overview)
   if (!is.null(plots$boxplots))  print(plots$boxplots)
-  
+
   # ---- gt-Tabelle (optional) ------------------------------------------------
   tbl_gt <- NULL
   if (has_gt) {
@@ -2979,7 +3185,7 @@ cashflow_hypothesis_test <- function(
       opt_stylize(style = 6, color = "blue") %>%
       opt_table_font(font = list(google_font("Source Sans Pro"), default_fonts()))
   }
-  
+
   invisible(list(
     summary   = summary_df,
     posthoc   = posthoc_list,

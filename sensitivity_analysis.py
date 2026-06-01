@@ -69,8 +69,8 @@ ALLOCATION_GRID = [
 
 # --- C) DURATION-STRATEGIEN ---
 DURATION_GRID = [
-    # (gov_mode, corp_mode, gov_init_dur, corp_init_dur)
-    ('fixed',              'fixed',             20.0, 10.0),
+    # (gov_mode, corp_mode, alt_mode, gov_init_dur, corp_init_dur, alt_init_dur)
+    ('fixed',              'fixed',             'fixed',             20.0, 10.0, 30.0),
 ]
 
 # --- D) SAMMELSTIFTUNG ---
@@ -307,7 +307,7 @@ def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid
         for alloc, duration, sammelstiftung in strategy_combos:
             scenario_id += 1
             w_gov, w_corp, w_eq, w_re, w_alt = alloc
-            gov_mode, corp_mode, gov_dur, corp_dur = duration
+            gov_mode, corp_mode, alt_mode, gov_dur, corp_dur, alt_dur = duration
             ss_enabled, ss_interval = sammelstiftung
 
             scenarios.append({
@@ -323,8 +323,10 @@ def build_scenario_list(pop_grid, alloc_grid, duration_grid, sammelstiftung_grid
                 # Duration
                 'gov_bond_duration_mode': gov_mode,
                 'corp_bond_duration_mode': corp_mode,
+                'alt_bond_duration_mode': alt_mode,
                 'initial_gov_bond_duration': gov_dur,
                 'initial_corp_bond_duration': corp_dur,
+                'initial_alt_bond_duration': alt_dur,
                 # Sammelstiftung
                 'sammelstiftung_enabled': ss_enabled,
                 'sammelstiftung_interval': ss_interval,
@@ -350,8 +352,10 @@ def apply_scenario_to_config(cfg, scenario):
     # Duration-Strategie
     cfg.GOV_BOND_DURATION_MODE = scenario['gov_bond_duration_mode']
     cfg.CORP_BOND_DURATION_MODE = scenario['corp_bond_duration_mode']
+    cfg.ALT_BOND_DURATION_MODE = scenario['alt_bond_duration_mode']
     cfg.INITIAL_GOV_BOND_DURATION = scenario['initial_gov_bond_duration']
     cfg.INITIAL_CORP_BOND_DURATION = scenario['initial_corp_bond_duration']
+    cfg.INITIAL_ALT_BOND_DURATION = scenario['initial_alt_bond_duration']
     cfg.INITIAL_BOND_DURATION = scenario['initial_gov_bond_duration']
 
     # Sammelstiftung
@@ -489,8 +493,10 @@ def export_scenario_csv(full_results, T_horizon, scenario_id, scenario,
         # Duration
         'gov_bond_duration_mode': cfg.GOV_BOND_DURATION_MODE,
         'corp_bond_duration_mode': cfg.CORP_BOND_DURATION_MODE,
+        'alt_bond_duration_mode': cfg.ALT_BOND_DURATION_MODE,
         'initial_gov_bond_duration': cfg.INITIAL_GOV_BOND_DURATION,
         'initial_corp_bond_duration': cfg.INITIAL_CORP_BOND_DURATION,
+        'initial_alt_bond_duration': cfg.INITIAL_ALT_BOND_DURATION,
         # Sammelstiftung
         'sammelstiftung_enabled': cfg.SAMMELSTIFTUNG_ENABLED,
         'sammelstiftung_interval': cfg.SAMMELSTIFTUNG_INTERVAL,
@@ -723,7 +729,9 @@ Beispiele:
         dur_keys = set()
         for s in scenarios:
             dur_keys.add((s['gov_bond_duration_mode'], s['corp_bond_duration_mode'],
-                         s['initial_gov_bond_duration'], s['initial_corp_bond_duration']))
+                         s['alt_bond_duration_mode'],
+                         s['initial_gov_bond_duration'], s['initial_corp_bond_duration'],
+                         s['initial_alt_bond_duration']))
         print(f"  Duration-Strategien:    {len(dur_keys)}")
 
         # Geschätzte Datenmenge (grob: ~0.5 MB pro Szenario bei 200 Pfaden x 40 Jahren)
@@ -740,7 +748,7 @@ Beispiele:
             alloc_str = (f"Gov={s['w_gov_bonds']:.0%} Corp={s['w_corp_bonds']:.0%} "
                         f"Eq={s['w_equities']:.0%} RE={s['w_realestate']:.0%} "
                         f"Alt={s['w_alternatives']:.0%}")
-            dur_str = f"{s['gov_bond_duration_mode']}/{s['corp_bond_duration_mode']}"
+            dur_str = f"{s['gov_bond_duration_mode']}/{s['corp_bond_duration_mode']}/{s['alt_bond_duration_mode']}"
             pop_str = (f"N={s['pop_n_population']} Age={s['pop_age_mean']} "
                       f"Pen={s['pop_pension_mean']}")
             ss_str = "SS" if s['sammelstiftung_enabled'] else "--"
@@ -836,7 +844,7 @@ Beispiele:
         alloc_str = (f"Gov={scenario['w_gov_bonds']:.0%} Corp={scenario['w_corp_bonds']:.0%} "
                     f"Eq={scenario['w_equities']:.0%} RE={scenario['w_realestate']:.0%} "
                     f"Alt={scenario['w_alternatives']:.0%}")
-        dur_str = f"{scenario['gov_bond_duration_mode'][:3]}/{scenario['corp_bond_duration_mode'][:3]}"
+        dur_str = f"{scenario['gov_bond_duration_mode'][:3]}/{scenario['corp_bond_duration_mode'][:3]}/{scenario['alt_bond_duration_mode'][:3]}"
         pop_str = f"N={scenario['pop_n_population']} Age={scenario['pop_age_mean']}"
         ss_str = "SS" if scenario['sammelstiftung_enabled'] else "--"
 

@@ -366,8 +366,8 @@ def _lhs_duration_sample(duration_config, n_samples, seed=0):
 
 def build_scenario_list(pop_grid, alloc_bounds, duration_config, sammelstiftung_grid,
                         lhs_samples=500, lhs_seed=0,
-                        alloc_samples=50, alloc_seed=1,
-                        dur_samples=20, dur_seed=2):
+                        alloc_samples=200, alloc_seed=1,
+                        dur_samples=3, dur_seed=2):
     """
     Erzeugt die Szenario-Liste via Latin Hypercube Sampling (LHS).
 
@@ -801,12 +801,12 @@ Beispiele:
                              '(Default: 500). Gesamtszenarien = lhs_samples x Strategie-Kombinationen.')
     parser.add_argument('--lhs_seed', type=int, default=0,
                         help='Random Seed für LHS-Sampling (Default: 0, für Reproduzierbarkeit)')
-    parser.add_argument('--alloc_samples', type=int, default=50,
-                        help='Anzahl LHS-Allokationen aus Bandbreiten (Default: 50)')
+    parser.add_argument('--alloc_samples', type=int, default=200,
+                        help='Anzahl LHS-Allokationen aus Bandbreiten (Default: 200)')
     parser.add_argument('--alloc_seed', type=int, default=1,
                         help='Random Seed für Allokations-LHS (Default: 1)')
-    parser.add_argument('--dur_samples', type=int, default=20,
-                        help='Anzahl LHS-Stichproben für Duration-Werte (Default: 20)')
+    parser.add_argument('--dur_samples', type=int, default=3,
+                        help='Anzahl LHS-Stichproben für Duration-Werte (Default: 3)')
     parser.add_argument('--dur_seed', type=int, default=2,
                         help='Random Seed für Duration-LHS (Default: 2)')
 

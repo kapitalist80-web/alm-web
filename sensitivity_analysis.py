@@ -413,7 +413,13 @@ def build_scenario_list(pop_grid, alloc_bounds, duration_config, sammelstiftung_
 
     # ---- LHS-Sampling des Populations-Parameterraums ----------------------
     lhs_variants = _lhs_sample(pop_grid, n_samples=lhs_samples, seed=lhs_seed)
-    all_variants = [base_pop.copy()] + lhs_variants
+    # LHS-Varianten auf base_pop mergen, damit immer alle Keys vorhanden sind
+    merged_variants = []
+    for v in lhs_variants:
+        merged = base_pop.copy()
+        merged.update(v)
+        merged_variants.append(merged)
+    all_variants = [base_pop.copy()] + merged_variants
 
     unique_pops = []
     seen = set()

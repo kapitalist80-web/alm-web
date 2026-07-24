@@ -79,6 +79,13 @@ def load_data(survival_table_path, initial_population_path):
     population['CurrentPension'] = population['InitialPension']
     population['Age'] = population['Age'].astype(int)
 
+    # SpouseAlive: Zustandsvariable, ob der Ehepartner (noch) lebt.
+    # Nur verheiratete Aktive haben zu Beginn einen lebenden Partner.
+    if 'MaritalStatus' in population.columns:
+        population['SpouseAlive'] = (population['MaritalStatus'] == 'Married')
+    else:
+        population['SpouseAlive'] = False
+
     return survival_table, population
 
 
@@ -284,7 +291,8 @@ def calculate_expected_cashflows(population_state, survival_table, qx_arrays, T_
     spouse_age_diffs = active_pensions['SpouseAgeDiff'].values if 'SpouseAgeDiff' in active_pensions.columns else np.zeros(len(ages))
     spouse_pension_rates = active_pensions['SpousePensionRate'].values if 'SpousePensionRate' in active_pensions.columns else np.full(len(ages), 0.40)
     initial_pensions = active_pensions['InitialPension'].values if 'InitialPension' in active_pensions.columns else pensions
-    
+    spouse_alive_flags = active_pensions['SpouseAlive'].values if 'SpouseAlive' in active_pensions.columns else (marital_statuses == 'Married')
+
     annual_admin_fee = float(getattr(cfg, 'ADMIN_FEE_PER_PERSON', 0.0))
     
     for i in range(len(ages)):
@@ -301,8 +309,8 @@ def calculate_expected_cashflows(population_state, survival_table, qx_arrays, T_
             p_survive_k = surv[age_int, k] if k < surv.shape[1] else 0.0
             expected_cf[k-1] += annual_cf * p_survive_k
         
-        # 2. EHEGATTENANWARTSCHAFT
-        if include_spouse and marital_statuses[i] == 'Married' and statuses[i] == 'Active':
+        # 2. EHEGATTENANWARTSCHAFT (nur wenn der Partner noch lebt)
+        if include_spouse and marital_statuses[i] == 'Married' and statuses[i] == 'Active' and spouse_alive_flags[i]:
             spouse_age_diff = spouse_age_diffs[i]
             if np.isnan(spouse_age_diff):
                 spouse_age_diff = -3 if gender == 'M' else 3
@@ -334,13 +342,15 @@ def calculate_expected_cashflows(population_state, survival_table, qx_arrays, T_
                     
                     # Witwe erhält Rente ab Jahr k+1
                     current_age_spouse = spouse_age_int + k
-                    for j in range(1, min(max_age + 1 - current_age_spouse, T_horizon - k)):
+                    for j in range(1, min(max_age + 1 - current_age_spouse, T_horizon - k + 1)):
                         payment_year = k + j  # Jahr relativ zu t=0
                         if payment_year > T_horizon:
                             break
-                        
-                        p_spouse_survives_j = surv_spouse[current_age_spouse, j] if j < surv_spouse.shape[1] else 0.0
-                        
+
+                        # P(Partner lebt in Jahr k+j) direkt ab Eintrittsalter y = k+j p_y
+                        # (identisch zu k p_y · j p_{y+k}, ohne Doppelzählung / fehlenden Faktor)
+                        p_spouse_survives_j = surv_spouse[spouse_age_int, k + j] if (k + j) < surv_spouse.shape[1] else 0.0
+
                         expected_cf[payment_year - 1] += spouse_pension * prob_death_in_k * p_spouse_survives_j
     
     return expected_cf
@@ -650,12 +660,13 @@ def calculate_liability_barwert_base(population_state, survival_table, tech_rate
     spouse_age_diffs = active_pensions['SpouseAgeDiff'].values if 'SpouseAgeDiff' in active_pensions.columns else np.zeros(len(ages))
     spouse_pension_rates = active_pensions['SpousePensionRate'].values if 'SpousePensionRate' in active_pensions.columns else np.full(len(ages), 0.40)
     initial_pensions = active_pensions['InitialPension'].values if 'InitialPension' in active_pensions.columns else pensions
-    
+    spouse_alive_flags = active_pensions['SpouseAlive'].values if 'SpouseAlive' in active_pensions.columns else (marital_statuses == 'Married')
+
     for i in range(len(ages)):
         age_int = min(ages[i], max_age)
         if age_int < 0:
             continue
-            
+
         annual_pension = pensions[i]
         annual_admin_fee = float(getattr(cfg, 'ADMIN_FEE_PER_PERSON', 0.0))
         gender = genders[i]
@@ -667,8 +678,8 @@ def calculate_liability_barwert_base(population_state, survival_table, tech_rate
         if annual_admin_fee:
             total_liability += annual_admin_fee * barwert_eigene_rente
         
-        # --- 2. ANWARTSCHAFT EHEGATTENRENTE ---
-        if marital_statuses[i] == 'Married' and statuses[i] == 'Active':
+        # --- 2. ANWARTSCHAFT EHEGATTENRENTE (nur wenn der Partner noch lebt) ---
+        if marital_statuses[i] == 'Married' and statuses[i] == 'Active' and spouse_alive_flags[i]:
             spouse_age_diff = spouse_age_diffs[i]
             if np.isnan(spouse_age_diff):
                 spouse_age_diff = -3 if gender == 'M' else 3
@@ -703,8 +714,9 @@ def calculate_liability_barwert_base(population_state, survival_table, tech_rate
                 if prob_death_in_k < 1e-12:
                     continue
                 
-                # P(Ehepartner lebt in Jahr k)
-                p_spouse_k = surv_spouse[spouse_age_int, k + 1] if (k + 1) < surv_spouse.shape[1] else 0.0
+                # P(Ehepartner lebt in Jahr k) = k p_y ab Eintrittsalter y.
+                # Zusammen mit ä_{y+k} (zahlt ab j=1) ergibt sich k+j p_y = k p_y · j p_{y+k}.
+                p_spouse_k = surv_spouse[spouse_age_int, k] if k < surv_spouse.shape[1] else 0.0
                 
                 if p_spouse_k < 1e-12:
                     continue
@@ -757,7 +769,8 @@ def calculate_liability_duration(population_state, survival_table, tech_rate,
     spouse_age_diffs = active_pensions['SpouseAgeDiff'].values if 'SpouseAgeDiff' in active_pensions.columns else np.zeros(len(ages))
     spouse_pension_rates = active_pensions['SpousePensionRate'].values if 'SpousePensionRate' in active_pensions.columns else np.full(len(ages), 0.40)
     initial_pensions = active_pensions['InitialPension'].values if 'InitialPension' in active_pensions.columns else pensions
-    
+    spouse_alive_flags = active_pensions['SpouseAlive'].values if 'SpouseAlive' in active_pensions.columns else (marital_statuses == 'Married')
+
     # Summiere: Σ(Barwert_i × Duration_i) und Σ(Barwert_i)
     sum_pv_times_duration = 0.0
     sum_pv = 0.0
@@ -788,7 +801,7 @@ def calculate_liability_duration(population_state, survival_table, tech_rate,
         pv_spouse = 0.0
         weighted_time_spouse = 0.0
         
-        if marital_statuses[i] == 'Married' and statuses[i] == 'Active':
+        if marital_statuses[i] == 'Married' and statuses[i] == 'Active' and spouse_alive_flags[i]:
             spouse_age_diff = spouse_age_diffs[i]
             if np.isnan(spouse_age_diff):
                 spouse_age_diff = -3 if gender == 'M' else 3
@@ -796,7 +809,7 @@ def calculate_liability_duration(population_state, survival_table, tech_rate,
             spouse_gender = 'F' if gender == 'M' else 'M'
             spouse_pension_rate = spouse_pension_rates[i] if not np.isnan(spouse_pension_rates[i]) else 0.40
             spouse_pension = initial_pensions[i] * spouse_pension_rate
-            
+
             if 0 <= spouse_age_int <= max_age:
                 qx_rentner = qx_arrays[gender]
                 surv_rentner = survival_probs[gender]
@@ -827,8 +840,9 @@ def calculate_liability_duration(population_state, survival_table, tech_rate,
                         if spouse_age_at_j > max_age:
                             break
                         
-                        # P(Partner lebt j Jahre nach Tod des Rentners in k)
-                        p_spouse_survives_j = surv_spouse[current_age_spouse, j] if j < surv_spouse.shape[1] else 0.0
+                        # P(Partner lebt in Jahr k+j) direkt ab Eintrittsalter y = k+j p_y
+                        # (identisch zu k p_y · j p_{y+k}, vermeidet Doppelzählung von vornherein)
+                        p_spouse_survives_j = surv_spouse[spouse_age_int, k + j] if (k + j) < surv_spouse.shape[1] else 0.0
                         
                         # Zeitpunkt der Zahlung: k + j Jahre ab heute
                         payment_time = k + j
@@ -880,7 +894,15 @@ def run_monte_carlo_path_full(args):
         np.random.seed(None)
     
     population_state = initial_population.copy()
-    
+
+    # SpouseAlive-Zustand sicherstellen (falls die Population nicht über load_data kam,
+    # z.B. aus externen Aufrufen). Garantiert saubere boolesche Werte im gesamten Pfad.
+    if 'SpouseAlive' not in population_state.columns:
+        if 'MaritalStatus' in population_state.columns:
+            population_state['SpouseAlive'] = (population_state['MaritalStatus'] == 'Married')
+        else:
+            population_state['SpouseAlive'] = False
+
     results_path = {
         'deckungsgrad': np.zeros(T_horizon),
         'portfolio_return': np.zeros(T_horizon),
@@ -1374,30 +1396,51 @@ def run_monte_carlo_path_full(args):
         results_path['num_pensioners'][t] = num_pensioners_before
         results_path['num_widows'][t] = num_widows_before
         
+        # 2a. PARTNERSTERBLICHKEIT (VOR der Rentnersterblichkeit).
+        # Entspricht exakt der k+1 p_y-Bedingung: stirbt der Partner im selben Jahr
+        # wie der Rentner, entsteht keine Anwartschaft (keine Witwenrente).
+        if 'SpouseAlive' in population_state.columns:
+            active_spouses = population_state[population_state['Status'] != 'Dead']
+            for index, person in active_spouses.iterrows():
+                if not bool(person.get('SpouseAlive', False)):
+                    continue
+                sp_diff = person.get('SpouseAgeDiff', np.nan)
+                if pd.isna(sp_diff):
+                    continue
+                sp_gender = 'F' if person['Gender'] == 'M' else 'M'
+                sp_age = int(person['Age']) + int(round(sp_diff))
+                if np.random.rand() <= get_qx(sp_age, sp_gender, survival_table):
+                    population_state.loc[index, 'SpouseAlive'] = False
+
         # 2. STERBLICHKEIT (am Jahresende, nach Rentenzahlung)
         active_pensions = population_state[population_state['Status'] != 'Dead'].copy()
         widows_data = []
-        
+
         for index, person in active_pensions.iterrows():
             age = person['Age']  # Aktuelles Alter (vor Alterung)
             gender = person['Gender']
             qx = get_qx(age, gender, survival_table)
-            
+
             if np.random.rand() <= qx:
                 population_state.loc[index, 'Status'] = 'Dead'
-                
-                # Prüfe auf Witwenrente
-                if person['MaritalStatus'] == 'Married' and person['Status'] == 'Active':
+
+                # Prüfe auf Witwenrente: nur wenn Partner beim Tod des Rentners noch lebt.
+                # Fehlt die Zustandsspalte (z.B. externer Aufruf), Rückfall auf altes Verhalten.
+                spouse_currently_alive = (bool(population_state.loc[index, 'SpouseAlive'])
+                                          if 'SpouseAlive' in population_state.columns else True)
+                if person['MaritalStatus'] == 'Married' and person['Status'] == 'Active' \
+                   and spouse_currently_alive:
                     spouse_gender = 'F' if gender == 'M' else 'M'
-                    # KORREKTUR Problem 3: Witwenalter korrekt berechnen
-                    # SpouseInitialAge ist das Alter des Partners bei t=0
-                    # Nach t Jahren (und vor Alterung in diesem Jahr) ist Partner:
-                    # SpouseInitialAge + t Jahre alt
-                    # Da der Tod am Jahresende ist, bekommt die Witwe im nächsten Jahr
-                    # ihre erste Rente, dann ist sie SpouseInitialAge + t + 1 alt
-                    # Aber wir fügen sie mit dem Alter hinzu, das sie JETZT hat,
-                    # und sie wird dann mit den anderen gealtert
-                    spouse_age = int(person['SpouseInitialAge']) + t  # Alter jetzt, vor Alterung
+                    # KORREKTUR Problem 3: Witwenalter von SpouseInitialAge entkoppeln.
+                    # SpouseInitialAge + t ist für Sammelstiftungs-Kohorten falsch
+                    # (t ist die absolute Simulationszeit, nicht die Zeit seit Beitritt).
+                    # Robust: aktuelles Rentneralter + Altersdifferenz.
+                    diff = person.get('SpouseAgeDiff', np.nan)
+                    if pd.isna(diff):
+                        diff = -3 if gender == 'M' else 3
+                    spouse_age = int(person['Age']) + int(round(diff))  # Alter jetzt, vor Alterung
+                    if not (0 <= spouse_age <= 110):
+                        continue  # keine Witwenrente, konsistent mit den Bewertungsfunktionen
                     # Individuelle Ehegattenrente-Rate verwenden (Default: 40%)
                     spouse_pension_rate = person.get('SpousePensionRate', 0.40)
                     if pd.isna(spouse_pension_rate):
@@ -1413,9 +1456,10 @@ def run_monte_carlo_path_full(args):
                         'CurrentPension': widow_pension, 
                         'Status': 'Widow/er',
                         'YearOfDeath': 0, 
-                        'SpouseAgeDiff': np.nan, 
+                        'SpouseAgeDiff': np.nan,
                         'SpouseInitialAge': np.nan,
                         'SpousePensionRate': np.nan,  # Witwen haben keine eigene Ehegattenrente
+                        'SpouseAlive': False,  # Witwen begründen keine weitere Anwartschaft
                     })
         
         if widows_data:
@@ -1524,6 +1568,11 @@ def run_monte_carlo_path_full(args):
             new_cohort['YearOfDeath'] = 0
             new_cohort['CurrentPension'] = new_cohort['InitialPension']
             new_cohort['SpouseInitialAge'] = new_cohort['Age'] + new_cohort['SpouseAgeDiff']
+            # Zustandsvariable für neue Kohorte (nur Verheiratete haben lebenden Partner)
+            if 'MaritalStatus' in new_cohort.columns:
+                new_cohort['SpouseAlive'] = (new_cohort['MaritalStatus'] == 'Married')
+            else:
+                new_cohort['SpouseAlive'] = False
 
             # 4. Berechne den Barwert der neuen Verpflichtungen zum aktuellen i_tech_t
             new_W = calculate_liability_barwert_base(new_cohort, survival_table, i_tech_t,

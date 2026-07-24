@@ -7,10 +7,9 @@ np.random.seed(42)
 N_POPULATION = 50  # Anzahl Rentner
 
 # Aktuelles Jahr für die Geburtsjahrberechnung
-CURRENT_YEAR = 2024
+CURRENT_YEAR = 2026
 
 # 1. Alter (Alter im aktuellen Jahr)
-# Normalverteilung um 78 Jahre, Standardabweichung 8, Grenzen 65 bis 100
 age_mean = 69
 age_std = 8
 min_age = 65
